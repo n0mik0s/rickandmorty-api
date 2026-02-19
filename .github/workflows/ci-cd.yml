@@ -58,7 +58,7 @@ jobs:
       # Security: source-code patterns (secrets, hardcoded creds, etc.)
       - name: Security scan with Bandit
         working-directory: ${{ env.APP_DIR }}
-        run: uv run bandit -r main.py -ll
+        run: uv run bandit -r main.py -c pyproject.toml -ll
 
   # ─────────────────────────────────────────────
   # 2. Unit Tests
