@@ -211,15 +211,15 @@ class TestGetDataValidation:
 
     def test_sort_order_case_insensitive_asc(self):
         # Validation passes for lowercase — any failure must not be a validation 400
-        resp = client.get("/data?sort_field=id&sort_order=asc")
+        resp = client.get("/data/?sort_field=id&sort_order=asc")
         assert resp.status_code not in (400,) or "ASC or DESC" not in resp.json().get("detail", "")
 
     def test_sort_order_case_insensitive_desc(self):
-        resp = client.get("/data?sort_field=id&sort_order=desc")
+        resp = client.get("/data/?sort_field=id&sort_order=desc")
         assert resp.status_code not in (400,) or "ASC or DESC" not in resp.json().get("detail", "")
 
     def test_valid_sort_field_data(self):
-        resp = client.get("/data?sort_field=data&sort_order=ASC")
+        resp = client.get("/data/?sort_field=data&sort_order=ASC")
         assert "id or data" not in resp.json().get("detail", "")
 
 
