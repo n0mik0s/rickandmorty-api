@@ -4,15 +4,15 @@ Unit tests for rickandmorty-api / main.py
 Run with:  uv run pytest tests/unit/ -v
 """
 import json
+import pathlib
 import sys
-import types
+
+# ── Bootstrap: provide dummy config files before the module is imported ──────
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
 import pytest
-
-# ── Bootstrap: provide dummy config files before the module is imported ──────
-import os, tempfile, pathlib
 
 _tmp = pathlib.Path(tempfile.mkdtemp())
 (_tmp / "secrets.json").write_text(
@@ -95,10 +95,11 @@ class TestRget(unittest.TestCase):
 # ─────────────────────────────────────────────────────────────────────────────
 # FastAPI app – endpoint input validation (no DB, no network)
 # ─────────────────────────────────────────────────────────────────────────────
-from fastapi.testclient import TestClient  # noqa: E402
-
 # Override lifespan so TestClient doesn't attempt a real DB connection
 from contextlib import asynccontextmanager  # noqa: E402
+
+from fastapi.testclient import TestClient  # noqa: E402
+
 
 @asynccontextmanager
 async def _noop_lifespan(app):
