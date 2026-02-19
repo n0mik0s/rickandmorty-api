@@ -8,6 +8,7 @@ the URL specified by the API_BASE_URL environment variable
 Run with:  uv run pytest tests/integration/ -v
 """
 import os
+
 import pytest
 import requests
 
