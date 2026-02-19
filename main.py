@@ -1,20 +1,18 @@
-import logging
-import json
-import requests
-import asyncpg
-import os
-import uvicorn
-import re
 import argparse
-import yaml
+import json
+import logging
+import re
 import sys
-
-
-from fastapi import FastAPI, HTTPException, status, Depends
-from pyrate_limiter import Duration, Limiter, Rate
-from fastapi_limiter.depends import RateLimiter
-from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+
+import asyncpg
+import requests
+import uvicorn
+import yaml
+from fastapi import Depends, FastAPI, HTTPException, status
+from fastapi.responses import JSONResponse
+from fastapi_limiter.depends import RateLimiter
+from pyrate_limiter import Duration, Limiter, Rate
 
 
 class JsonFormatter(logging.Formatter):
@@ -35,25 +33,25 @@ parser = argparse.ArgumentParser(
 )
 
 parser.add_argument(
-    '--config', 
-    type=str, 
+    '--config',
+    type=str,
     default='../tmp/config.yaml',
     help='Path to the configuration in yaml file (default: ../tmp/config.yaml)'
 )
 
 parser.add_argument(
-    '--secret', 
-    type=str, 
+    '--secret',
+    type=str,
     default='../tmp/secrets.json',
     help='Path to the secret/credentials in json file (default: ../tmp/secrets.json)'
 )
 
 args = parser.parse_args()
 
-with open(args.secret, 'r') as file:
+with open(args.secret) as file:
     db_config = json.load(file)
 
-with open(args.config, 'r') as file:
+with open(args.config) as file:
     log_level = yaml.safe_load(file)["log_level"]
 
 logger = logging.getLogger("rickandmorty-app")
@@ -72,11 +70,11 @@ def rget(url, payload):
         if _r.status_code == requests.codes.ok:
             logger.info('Sucussfully requested API')
             return _r
-            
+
         else:
             logger.error('Request status not OK')
             _r.raise_for_status()
-        
+
     except requests.exceptions.HTTPError as _err:
         logger.error(_err)
 
@@ -99,7 +97,7 @@ async def lifespan(app: FastAPI):
 
     async with app.state.pool.acquire() as _conn:
         _dbname = db_config['dbname']
-        
+
         _exists = await _conn.fetchval(
             "SELECT 1 FROM pg_database WHERE datname = $1", _dbname
         )
@@ -107,7 +105,7 @@ async def lifespan(app: FastAPI):
         if not _exists:
             await _conn.execute(f'CREATE DATABASE "{_dbname}"')
             logger.info('Sucussfully created DB')
-    
+
     yield
 
     await app.state.pool.close()
@@ -145,13 +143,13 @@ async def sync_data(source_url: str, resource: str):
     )
 
     try:
-        _query = f"CREATE TABLE IF NOT EXISTS character (id SERIAL PRIMARY KEY, data JSONB)"
+        _query = "CREATE TABLE IF NOT EXISTS character (id SERIAL PRIMARY KEY, data JSONB)"
         await _conn.execute(_query)
         logger.info('Sucussfully created table')
 
         _array_of_dicts = [(_item['id'], json.dumps(_item),) for _item in _array_of_dicts]
 
-        _query = f"INSERT INTO character (id, data) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING"
+        _query = "INSERT INTO character (id, data) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING"
         await _conn.executemany(
             _query,
             _array_of_dicts
@@ -172,7 +170,7 @@ async def get_data(sort_field: str, sort_order: str):
     _pattern = r"^(ASC|DESC)$"
     if not re.match(_pattern, sort_order, re.IGNORECASE):
         raise HTTPException(status_code=400, detail="Sort order must be ASC or DESC")
-    
+
     _pattern = r"^(id|data)$"
     if not re.match(_pattern, sort_field, re.IGNORECASE):
         raise HTTPException(status_code=400, detail="Sort field must be id or data")
@@ -186,7 +184,7 @@ async def get_data(sort_field: str, sort_order: str):
 
     try:
         _query = f"SELECT id, data FROM character ORDER BY {sort_field} {sort_order}"
-        
+
         _rows = await _conn.fetch(_query)
 
         logger.error('Sucussfully fetched data')
@@ -211,8 +209,8 @@ async def monitoring(aspect: str):
                     password=db_config['password'],
                 )
 
-                _query = f"SELECT 1"
-                
+                _query = "SELECT 1"
+
                 await _conn.fetch(_query)
 
                 await _conn.close()
@@ -238,8 +236,8 @@ async def monitoring(aspect: str):
                     password=db_config['password'],
                 )
 
-                _query = f"SELECT COUNT(*) FROM character;"
-                
+                _query = "SELECT COUNT(*) FROM character;"
+
                 _records = await _conn.fetch(_query)
 
                 await _conn.close()
