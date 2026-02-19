@@ -6,13 +6,11 @@ Run with:  uv run pytest tests/unit/ -v
 
 import json
 import logging
+import pathlib
 import sys
 import tempfile
-import pathlib
 from contextlib import asynccontextmanager
 from unittest.mock import MagicMock, patch
-
-import pytest
 
 # ── Provide dummy config files before the module is imported ─────────────────
 _tmp = pathlib.Path(tempfile.mkdtemp())
@@ -31,7 +29,6 @@ sys.argv = [
 ]
 
 import main  # noqa: E402
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Replace lifespan so TestClient never attempts a real DB connection
