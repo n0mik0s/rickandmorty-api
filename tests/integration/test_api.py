@@ -39,47 +39,6 @@ class TestReachability:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# /db-mon endpoint
-# ─────────────────────────────────────────────────────────────────────────────
-class TestDbMon:
-    def test_conn_aspect_returns_200(self, session):
-        resp = session.get(f"{BASE_URL}/db-mon?aspect=conn")
-        assert resp.status_code == 200
-
-    def test_records_aspect_returns_200(self, session):
-        resp = session.get(f"{BASE_URL}/db-mon?aspect=records")
-        assert resp.status_code == 200
-
-    def test_invalid_aspect_returns_400(self, session):
-        resp = session.get(f"{BASE_URL}/db-mon?aspect=unknown")
-        assert resp.status_code == 400
-        assert "Unrecognized aspect" in resp.json()["detail"]
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# /data endpoint – validation
-# ─────────────────────────────────────────────────────────────────────────────
-class TestGetData:
-    def test_invalid_sort_order_returns_400(self, session):
-        resp = session.get(f"{BASE_URL}/data?sort_field=id&sort_order=NOPE")
-        assert resp.status_code == 400
-
-    def test_invalid_sort_field_returns_400(self, session):
-        resp = session.get(f"{BASE_URL}/data?sort_field=name&sort_order=ASC")
-        assert resp.status_code == 400
-
-    def test_valid_request_returns_list(self, session):
-        resp = session.get(f"{BASE_URL}/data?sort_field=id&sort_order=ASC")
-        assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
-
-    def test_sort_desc_returns_list(self, session):
-        resp = session.get(f"{BASE_URL}/data?sort_field=id&sort_order=DESC")
-        assert resp.status_code == 200
-        assert isinstance(resp.json(), list)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
 # /sync endpoint – validation (does NOT actually hit Rick & Morty API)
 # ─────────────────────────────────────────────────────────────────────────────
 class TestSync:
@@ -110,3 +69,44 @@ class TestSync:
         ]
         status_codes = {r.status_code for r in responses}
         assert 429 in status_codes, "Expected at least one 429 from the rate limiter"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /data endpoint – validation
+# ─────────────────────────────────────────────────────────────────────────────
+class TestGetData:
+    def test_invalid_sort_order_returns_400(self, session):
+        resp = session.get(f"{BASE_URL}/data?sort_field=id&sort_order=NOPE")
+        assert resp.status_code == 400
+
+    def test_invalid_sort_field_returns_400(self, session):
+        resp = session.get(f"{BASE_URL}/data?sort_field=name&sort_order=ASC")
+        assert resp.status_code == 400
+
+    def test_valid_request_returns_list(self, session):
+        resp = session.get(f"{BASE_URL}/data?sort_field=id&sort_order=ASC")
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)
+
+    def test_sort_desc_returns_list(self, session):
+        resp = session.get(f"{BASE_URL}/data?sort_field=id&sort_order=DESC")
+        assert resp.status_code == 200
+        assert isinstance(resp.json(), list)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# /db-mon endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+class TestDbMon:
+    def test_conn_aspect_returns_200(self, session):
+        resp = session.get(f"{BASE_URL}/db-mon?aspect=conn")
+        assert resp.status_code == 200
+
+    def test_records_aspect_returns_200(self, session):
+        resp = session.get(f"{BASE_URL}/db-mon?aspect=records")
+        assert resp.status_code == 200
+
+    def test_invalid_aspect_returns_400(self, session):
+        resp = session.get(f"{BASE_URL}/db-mon?aspect=unknown")
+        assert resp.status_code == 400
+        assert "Unrecognized aspect" in resp.json()["detail"]
