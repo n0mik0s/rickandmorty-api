@@ -53,7 +53,7 @@ class TestSync:
         )
         # We expect either an application error or a network error surfaced by
         # the app, but NOT a 404 for the route itself.
-        assert resp.status_code == 200
+        assert resp.status_code == 201
 
     def test_sync_invalid_resource_still_attempts_request(self, session):
         """
