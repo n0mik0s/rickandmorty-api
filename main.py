@@ -64,7 +64,7 @@ def rget(url, payload):
     _payload = payload
 
     try:
-        _r = requests.get(_url, _payload)
+        _r = requests.get(_url, _payload, timeout=(5, 30))
 
         if _r.status_code == requests.codes.ok:
             logger.info("Sucussfully requested API")
