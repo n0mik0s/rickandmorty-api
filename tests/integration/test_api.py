@@ -42,6 +42,18 @@ class TestReachability:
 # /sync endpoint – validation (does NOT actually hit Rick & Morty API)
 # ─────────────────────────────────────────────────────────────────────────────
 class TestSync:
+    def test_sync_valid_resource_for_fill_data(self, session):
+        """
+        Posting with a reachable URL should result in
+        a 200 – confirming the endpoint is up and reachable.
+        """
+        resp = session.post(
+            f"{BASE_URL}/sync",
+            params={"source_url": "rickandmortyapi.com", "resource": "character"},
+        )
+        # We expect either an application error or a network error surfaced by
+        # the app, but NOT a 404 for the route itself.
+        assert resp.status_code == 200
     def test_sync_invalid_resource_still_attempts_request(self, session):
         """
         Posting with a clearly unreachable URL should result in a 4xx/5xx,
