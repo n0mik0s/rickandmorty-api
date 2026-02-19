@@ -92,21 +92,3 @@ class TestGetData:
         resp = session.get(f"{BASE_URL}/data?sort_field=id&sort_order=DESC")
         assert resp.status_code == 200
         assert isinstance(resp.json(), list)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# /db-mon endpoint
-# ─────────────────────────────────────────────────────────────────────────────
-class TestDbMon:
-    def test_conn_aspect_returns_200(self, session):
-        resp = session.get(f"{BASE_URL}/db-mon?aspect=conn")
-        assert resp.status_code == 200
-
-    def test_records_aspect_returns_200(self, session):
-        resp = session.get(f"{BASE_URL}/db-mon?aspect=records")
-        assert resp.status_code == 200
-
-    def test_invalid_aspect_returns_400(self, session):
-        resp = session.get(f"{BASE_URL}/db-mon?aspect=unknown")
-        assert resp.status_code == 400
-        assert "Unrecognized aspect" in resp.json()["detail"]

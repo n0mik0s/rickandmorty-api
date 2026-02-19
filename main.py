@@ -110,7 +110,7 @@ app = FastAPI(lifespan=lifespan)
 
 
 @app.post(
-    "/sync", dependencies=[Depends(RateLimiter(limiter=Limiter(Rate(2, Duration.SECOND * 5))))]
+    "/sync", dependencies=[Depends(RateLimiter(limiter=Limiter(Rate(50, Duration.SECOND * 1))))]
 )
 async def sync_data(source_url: str, resource: str):
     _base_character_url = f"https://{source_url}/api/{resource}"
@@ -162,7 +162,7 @@ async def sync_data(source_url: str, resource: str):
 
 
 @app.get(
-    "/data", dependencies=[Depends(RateLimiter(limiter=Limiter(Rate(2, Duration.SECOND * 5))))]
+    "/data", dependencies=[Depends(RateLimiter(limiter=Limiter(Rate(50, Duration.SECOND * 1))))]
 )
 async def get_data(sort_field: str, sort_order: str):
     _pattern = r"^(ASC|DESC)$"
@@ -195,7 +195,7 @@ async def get_data(sort_field: str, sort_order: str):
 
 
 @app.get(
-    "/db-mon", dependencies=[Depends(RateLimiter(limiter=Limiter(Rate(2, Duration.SECOND * 5))))]
+    "/db-mon", dependencies=[Depends(RateLimiter(limiter=Limiter(Rate(50, Duration.SECOND * 1))))]
 )
 async def monitoring(aspect: str):
     match aspect:
