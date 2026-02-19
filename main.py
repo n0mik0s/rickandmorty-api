@@ -62,10 +62,7 @@ logger.setLevel(log_level)
 def rget(url, payload):
     _url = url
     _payload = payload
-    _return = {
-        "status": False,
-        "content": None
-    }
+    _return = {"status": False, "content": None}
 
     try:
         _r = requests.get(_url, _payload, timeout=(5, 30))
@@ -140,7 +137,9 @@ async def sync_data(source_url: str, resource: str):
 
     _get = rget(url=_base_character_url, payload=_payload)
 
-    while _get["status"] and (_get["content"].json()["info"]["next"] or _get["content"].json()["results"]):
+    while _get["status"] and (
+        _get["content"].json()["info"]["next"] or _get["content"].json()["results"]
+    ):
         _next = _get["content"].json()["info"]["next"]
         _array_of_dicts += _get["content"].json()["results"]
 
