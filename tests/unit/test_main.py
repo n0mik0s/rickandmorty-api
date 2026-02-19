@@ -3,6 +3,7 @@ Unit tests for rickandmorty-api / main.py  (matches updated main.py)
 
 Run with:  uv run pytest tests/unit/ -v
 """
+
 import json
 import logging
 import sys
@@ -23,8 +24,10 @@ _tmp = pathlib.Path(tempfile.mkdtemp())
 # Patch sys.argv so argparse uses our dummy paths instead of pytest's argv
 sys.argv = [
     "main.py",
-    "--config", str(_tmp / "config.yaml"),
-    "--secret", str(_tmp / "secrets.json"),
+    "--config",
+    str(_tmp / "config.yaml"),
+    "--secret",
+    str(_tmp / "secrets.json"),
 ]
 
 import main  # noqa: E402
@@ -34,13 +37,16 @@ import main  # noqa: E402
 # Replace lifespan so TestClient never attempts a real DB connection
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 @asynccontextmanager
 async def _noop_lifespan(app):
     yield
 
+
 main.app.router.lifespan_context = _noop_lifespan
 
 from fastapi.testclient import TestClient  # noqa: E402
+
 client = TestClient(main.app, raise_server_exceptions=False)
 
 
@@ -48,11 +54,17 @@ client = TestClient(main.app, raise_server_exceptions=False)
 # JsonFormatter
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestJsonFormatter:
     def _make_record(self, level, msg, name="test"):
         r = logging.LogRecord(
-            name=name, level=level, pathname="", lineno=0,
-            msg=msg, args=(), exc_info=None,
+            name=name,
+            level=level,
+            pathname="",
+            lineno=0,
+            msg=msg,
+            args=(),
+            exc_info=None,
         )
         return r
 
@@ -61,7 +73,9 @@ class TestJsonFormatter:
         assert isinstance(parsed, dict)
 
     def test_message_field(self):
-        parsed = json.loads(main.JsonFormatter().format(self._make_record(logging.INFO, "test msg")))
+        parsed = json.loads(
+            main.JsonFormatter().format(self._make_record(logging.INFO, "test msg"))
+        )
         assert parsed["message"] == "test msg"
 
     def test_level_info(self):
@@ -77,7 +91,9 @@ class TestJsonFormatter:
         assert "time" in parsed
 
     def test_logger_name_field(self):
-        parsed = json.loads(main.JsonFormatter().format(self._make_record(logging.WARNING, "", name="mylogger")))
+        parsed = json.loads(
+            main.JsonFormatter().format(self._make_record(logging.WARNING, "", name="mylogger"))
+        )
         assert parsed["logger"] == "mylogger"
 
 
@@ -85,10 +101,12 @@ class TestJsonFormatter:
 # rget  — now always returns {"status": bool, "content": ...}, never raises
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestRget:
     @patch("main.requests.get")
     def test_success_status_true(self, mock_get):
         import requests as _req
+
         mock_resp = MagicMock()
         mock_resp.status_code = _req.codes.ok
         mock_get.return_value = mock_resp
@@ -112,6 +130,7 @@ class TestRget:
     @patch("main.requests.get")
     def test_http_error_exception_caught(self, mock_get):
         import requests as _req
+
         mock_get.side_effect = _req.exceptions.HTTPError("http error")
 
         result = main.rget("http://example.com", {})
@@ -122,6 +141,7 @@ class TestRget:
     @patch("main.requests.get")
     def test_connection_error_caught(self, mock_get):
         import requests as _req
+
         mock_get.side_effect = _req.exceptions.ConnectionError("conn refused")
 
         result = main.rget("http://example.com", {})
@@ -139,6 +159,7 @@ class TestRget:
     @patch("main.requests.get")
     def test_timeout_is_passed(self, mock_get):
         import requests as _req
+
         mock_resp = MagicMock()
         mock_resp.status_code = _req.codes.ok
         mock_get.return_value = mock_resp
@@ -151,6 +172,7 @@ class TestRget:
     @patch("main.requests.get")
     def test_returns_dict_shape_on_success(self, mock_get):
         import requests as _req
+
         mock_resp = MagicMock()
         mock_resp.status_code = _req.codes.ok
         mock_get.return_value = mock_resp
@@ -173,6 +195,7 @@ class TestRget:
 # ─────────────────────────────────────────────────────────────────────────────
 # /data — input validation (no DB needed)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestGetDataValidation:
     def test_invalid_sort_order_returns_400(self):
@@ -211,6 +234,7 @@ class TestGetDataValidation:
 # /db-mon — input validation (no DB needed)
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 class TestDbMonValidation:
     def test_unknown_aspect_returns_400(self):
         resp = client.get("/db-mon?aspect=garbage")
@@ -229,6 +253,7 @@ class TestDbMonValidation:
 # ─────────────────────────────────────────────────────────────────────────────
 # /sync — route wiring & rget failure handling (no network, no DB)
 # ─────────────────────────────────────────────────────────────────────────────
+
 
 class TestSyncRoute:
     def test_missing_params_returns_422(self):
