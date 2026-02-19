@@ -62,22 +62,43 @@ logger.setLevel(log_level)
 def rget(url, payload):
     _url = url
     _payload = payload
+    _return = {
+        "status": False,
+        "content": None
+    }
 
     try:
         _r = requests.get(_url, _payload, timeout=(5, 30))
 
         if _r.status_code == requests.codes.ok:
             logger.info("Sucussfully requested API")
-            return _r
+            _return["status"] = True
+            _return["content"] = _r
 
         else:
             logger.error("Request status not OK")
-            _r.raise_for_status()
+            _return["status"] = False
+            _return["content"] = "Request status not OK"
 
     except requests.exceptions.HTTPError as _err:
         logger.error(_err)
 
-    return None
+        _return["status"] = False
+        _return["content"] = _err
+
+    except requests.exceptions.ConnectionError as _err:
+        logger.error(_err)
+
+        _return["status"] = False
+        _return["content"] = _err
+
+    except Exception as _err:
+        logger.error(_err)
+
+        _return["status"] = False
+        _return["content"] = _err
+
+    return _return
 
 
 @asynccontextmanager
@@ -119,46 +140,47 @@ async def sync_data(source_url: str, resource: str):
 
     _get = rget(url=_base_character_url, payload=_payload)
 
-    while _get and (_get.json()["info"]["next"] or _get.json()["results"]):
-        _next = _get.json()["info"]["next"]
-        _array_of_dicts += _get.json()["results"]
+    while _get["status"] and (_get["content"].json()["info"]["next"] or _get["content"].json()["results"]):
+        _next = _get["content"].json()["info"]["next"]
+        _array_of_dicts += _get["content"].json()["results"]
 
         if _next:
             _get = rget(url=_next, payload={})
         else:
             break
 
-    _conn = await asyncpg.connect(
-        host=db_config["host"],
-        user=db_config["user"],
-        database=db_config["dbname"],
-        password=db_config["password"],
-    )
-
-    try:
-        _query = "CREATE TABLE IF NOT EXISTS character (id SERIAL PRIMARY KEY, data JSONB)"
-        await _conn.execute(_query)
-        logger.info("Sucussfully created table")
-
-        _array_of_dicts = [
-            (
-                _item["id"],
-                json.dumps(_item),
-            )
-            for _item in _array_of_dicts
-        ]
-
-        _query = "INSERT INTO character (id, data) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING"
-        await _conn.executemany(_query, _array_of_dicts)
-
-        return JSONResponse(
-            status_code=status.HTTP_201_CREATED,
-            content={"status": "success", "records_synced": len(_array_of_dicts)},
+    if _array_of_dicts:
+        _conn = await asyncpg.connect(
+            host=db_config["host"],
+            user=db_config["user"],
+            database=db_config["dbname"],
+            password=db_config["password"],
         )
-    except asyncpg.exceptions.DataError as _err:
-        raise HTTPException(status_code=400, detail=f"Invalid data format: {str(_err)}")
-    finally:
-        await _conn.close()
+
+        try:
+            _query = "CREATE TABLE IF NOT EXISTS character (id SERIAL PRIMARY KEY, data JSONB)"
+            await _conn.execute(_query)
+            logger.info("Sucussfully created table")
+
+            _array_of_dicts = [
+                (
+                    _item["id"],
+                    json.dumps(_item),
+                )
+                for _item in _array_of_dicts
+            ]
+
+            _query = "INSERT INTO character (id, data) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING"
+            await _conn.executemany(_query, _array_of_dicts)
+
+            return JSONResponse(
+                status_code=status.HTTP_201_CREATED,
+                content={"status": "success", "records_synced": len(_array_of_dicts)},
+            )
+        except asyncpg.exceptions.DataError as _err:
+            raise HTTPException(status_code=400, detail=f"Invalid data format: {str(_err)}")
+        finally:
+            await _conn.close()
 
 
 @app.get(

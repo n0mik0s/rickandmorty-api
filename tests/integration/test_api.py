@@ -57,7 +57,7 @@ class TestSync:
 
     def test_rate_limiter_kicks_in(self, session):
         """
-        The endpoint allows 2 requests per 5 seconds; a burst of 5 should
+        The endpoint allows 50 requests per 1 seconds; a burst of 100 should
         trigger at least one 429.
         """
         responses = [
@@ -65,7 +65,7 @@ class TestSync:
                 f"{BASE_URL}/sync",
                 params={"source_url": "does.not.exist.invalid", "resource": "character"},
             )
-            for _ in range(5)
+            for _ in range(100)
         ]
         status_codes = {r.status_code for r in responses}
         assert 429 in status_codes, "Expected at least one 429 from the rate limiter"
