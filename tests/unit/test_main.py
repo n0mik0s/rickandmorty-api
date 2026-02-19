@@ -3,6 +3,7 @@ Unit tests for rickandmorty-api / main.py
 
 Run with:  uv run pytest tests/unit/ -v
 """
+
 import json
 import pathlib
 import sys
@@ -21,7 +22,13 @@ _tmp = pathlib.Path(tempfile.mkdtemp())
 (_tmp / "config.yaml").write_text("log_level: INFO\n")
 
 # Patch sys.argv so argparse uses our dummy paths instead of pytest's argv
-sys.argv = ["main.py", "--config", str(_tmp / "config.yaml"), "--secret", str(_tmp / "secrets.json")]
+sys.argv = [
+    "main.py",
+    "--config",
+    str(_tmp / "config.yaml"),
+    "--secret",
+    str(_tmp / "secrets.json"),
+]
 
 import main  # noqa: E402  (must come after argv patch)
 
@@ -32,11 +39,16 @@ import main  # noqa: E402  (must come after argv patch)
 class TestJsonFormatter(unittest.TestCase):
     def test_format_returns_valid_json(self):
         import logging
+
         formatter = main.JsonFormatter()
         record = logging.LogRecord(
-            name="test", level=logging.INFO,
-            pathname="", lineno=0,
-            msg="hello world", args=(), exc_info=None
+            name="test",
+            level=logging.INFO,
+            pathname="",
+            lineno=0,
+            msg="hello world",
+            args=(),
+            exc_info=None,
         )
         output = formatter.format(record)
         parsed = json.loads(output)
@@ -47,11 +59,16 @@ class TestJsonFormatter(unittest.TestCase):
 
     def test_format_includes_correct_level(self):
         import logging
+
         formatter = main.JsonFormatter()
         record = logging.LogRecord(
-            name="test", level=logging.ERROR,
-            pathname="", lineno=0,
-            msg="oops", args=(), exc_info=None
+            name="test",
+            level=logging.ERROR,
+            pathname="",
+            lineno=0,
+            msg="oops",
+            args=(),
+            exc_info=None,
         )
         parsed = json.loads(formatter.format(record))
         assert parsed["level"] == "ERROR"
@@ -68,6 +85,7 @@ class TestRget(unittest.TestCase):
         mock_resp.raise_for_status = MagicMock()
         # requests.codes.ok is 200
         import requests as _req
+
         mock_resp.status_code = _req.codes.ok
         mock_get.return_value = mock_resp
 
@@ -77,6 +95,7 @@ class TestRget(unittest.TestCase):
     @patch("main.requests.get")
     def test_non_ok_status_returns_none(self, mock_get):
         import requests as _req
+
         mock_resp = MagicMock()
         mock_resp.status_code = 500
         mock_resp.raise_for_status.side_effect = _req.exceptions.HTTPError("500 error")
@@ -104,6 +123,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 @asynccontextmanager
 async def _noop_lifespan(app):
     yield
+
 
 main.app.router.lifespan_context = _noop_lifespan
 client = TestClient(main.app, raise_server_exceptions=False)
