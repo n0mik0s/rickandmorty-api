@@ -89,3 +89,5 @@ Bash
 | `GET` | `/db-mon` | `aspect=records` | Returns total record count in `character` table. |
 
 > **Rate Limit**: All endpoints are limited to 2 requests per 5 seconds per worker instance (handled in-memory).
+
+### Full OpenAPI 3.0 Documentation please find in openapi.json
