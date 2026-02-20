@@ -87,11 +87,13 @@ spec:
           volumeMounts:
             # config.yaml — from ConfigMap (non-sensitive)
             - name: app-config
-              mountPath: {{ .Values.app.configPath | dir }}
+              mountPath: {{ .Values.app.configPath }}
+              subPath: {{ .Values.app.configPath | basename }}
               readOnly: true
             # secrets.json — from Secret produced by ESO
             - name: app-secret
-              mountPath: {{ .Values.app.secretPath | dir }}
+              mountPath: {{ .Values.app.secretPath }}
+              subPath: {{ .Values.app.secretPath | basename }}
               readOnly: true
             # writable /tmp required by readOnlyRootFilesystem
             - name: tmp

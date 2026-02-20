@@ -42,14 +42,12 @@ config:
 
 # ── External Secrets Operator ─────────────────────────────────────────────────
 externalSecrets:
-  # The K8s Secret created in CI from GitHub Actions secrets
   sourceSecretName: rickandmorty-db-raw
   sourceSecretKey: secrets.json
   secretStore:
     name: rickandmorty-secret-store
   externalSecret:
     name: rickandmorty-api-db
-    targetSecretName: rickandmorty-db-secret
 
 # ── Kubernetes Service ───────────────────────────────────────────────────────
 service:
