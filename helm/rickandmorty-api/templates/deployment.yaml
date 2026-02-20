@@ -88,12 +88,12 @@ spec:
             # config.yaml — from ConfigMap (non-sensitive)
             - name: app-config
               mountPath: {{ .Values.app.configPath }}
-              subPath: {{ .Values.app.configPath | basename }}
+              subPath: {{ .Values.app.configPath | base }}
               readOnly: true
             # secrets.json — from Secret produced by ESO
             - name: app-secret
               mountPath: {{ .Values.app.secretPath }}
-              subPath: {{ .Values.app.secretPath | basename }}
+              subPath: {{ .Values.app.secretPath | base }}
               readOnly: true
             # writable /tmp required by readOnlyRootFilesystem
             - name: tmp
