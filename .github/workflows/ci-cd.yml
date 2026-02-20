@@ -363,17 +363,34 @@ jobs:
             --wait \
             --timeout 3m
 
-      # kubectl wait for CRD Established is the only reliable gate —
-      # helm --wait only tracks pod readiness, not CRD registration.
-      - name: Wait for ESO CRDs to be Established
+      # kubectl wait --for=condition=Established confirms the CRD object exists,
+      # but the API server's REST discovery cache can still lag behind.
+      # The only reliable gate is to poll kubectl api-resources until the
+      # SecretStore kind actually appears in the discovery list.
+      - name: Wait for ESO CRDs to be Established and discoverable
         run: |
           for crd in \
             externalsecrets.external-secrets.io \
             secretstores.external-secrets.io \
             clustersecretstores.external-secrets.io; do
-            echo "Waiting for CRD: $crd"
+            echo "Waiting for CRD object: $crd"
             kubectl wait --for=condition=Established crd/$crd --timeout=60s
           done
+
+          echo "Polling until SecretStore appears in API discovery..."
+          for i in $(seq 1 30); do
+            if kubectl api-resources | grep -q "secretstores"; then
+              echo "SecretStore is discoverable after $i attempts."
+              break
+            fi
+            echo "Attempt $i/30 — not yet discoverable, retrying in 5s..."
+            sleep 5
+          done
+
+          if ! kubectl api-resources | grep -q "secretstores"; then
+            echo "ERROR: SecretStore never became discoverable."
+            exit 1
+          fi
 
       # ── e) Push raw secret ────────────────────────────────────────────────
       - name: Push db secret to cluster
