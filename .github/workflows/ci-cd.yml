@@ -378,8 +378,9 @@ jobs:
           done
 
           echo "Polling until SecretStore appears in API discovery..."
+          echo $(kubectl api-resources --api-group=external-secrets.io)
           for i in $(seq 1 30); do
-            if kubectl api-resources | grep -q "secretstores"; then
+            if kubectl api-resources --api-group=external-secrets.io 2>/dev/null | grep -q "secretstores.*v1beta1"; then
               echo "SecretStore is discoverable after $i attempts."
               break
             fi
@@ -387,7 +388,7 @@ jobs:
             sleep 5
           done
 
-          if ! kubectl api-resources | grep -q "secretstores"; then
+          if ! kubectl api-resources --api-group=external-secrets.io 2>/dev/null | grep -q "secretstores.*v1beta1"; then
             echo "ERROR: SecretStore never became discoverable."
             exit 1
           fi
