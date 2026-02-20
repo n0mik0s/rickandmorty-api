@@ -284,6 +284,8 @@ jobs:
   deploy-kind:
     name: Deploy to KinD
     runs-on: ubuntu-latest
+    env:
+      K8S_NAMESPACE: rickandmorty
     needs: push-image
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
 
