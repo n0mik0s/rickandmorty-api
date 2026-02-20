@@ -347,12 +347,18 @@ jobs:
             --timeout 3m
 
       # ── d) ESO + wait for CRDs ────────────────────────────────────────────
+      # Install ESO into the same namespace as the app so its ServiceAccount
+      # exists in rickandmorty and can read secrets there without any
+      # cross-namespace RBAC. CRDs are cluster-scoped so namespace doesn't
+      # affect their availability.
+      - name: Create namespace
+        run: kubectl create namespace ${{ env.K8S_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+
       - name: Install External Secrets Operator
         run: |
           helm repo add external-secrets https://charts.external-secrets.io --force-update
           helm upgrade --install external-secrets external-secrets/external-secrets \
-            --namespace external-secrets \
-            --create-namespace \
+            --namespace ${{ env.K8S_NAMESPACE }} \
             --set installCRDs=true \
             --wait \
             --timeout 3m
@@ -369,10 +375,7 @@ jobs:
             kubectl wait --for=condition=Established crd/$crd --timeout=60s
           done
 
-      # ── e) Namespace + raw secret ─────────────────────────────────────────
-      - name: Create namespace
-        run: kubectl create namespace ${{ env.K8S_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
-
+      # ── e) Push raw secret ────────────────────────────────────────────────
       - name: Push db secret to cluster
         env:
           DB_SECRET_JSON: ${{ secrets.RICKANDMORTY_DB_SECRET }}
@@ -383,38 +386,7 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
 
       # ── f) Apply ESO resources via kubectl (NOT via Helm) ─────────────────
-      # SecretStore is namespace-scoped and must live in the SAME namespace as
-      # the ExternalSecret (rickandmorty) — NOT in the ESO controller namespace
-      # (external-secrets). The ESO controller's ServiceAccount needs a
-      # RoleBinding in rickandmorty to read the source Secret.
-      - name: Grant ESO controller access to rickandmorty namespace
-        run: |
-          kubectl apply -f - <<'EOF'
-          apiVersion: rbac.authorization.k8s.io/v1
-          kind: Role
-          metadata:
-            name: eso-secret-reader
-            namespace: rickandmorty
-          rules:
-            - apiGroups: [""]
-              resources: ["secrets"]
-              verbs: ["get", "list", "watch"]
-          ---
-          apiVersion: rbac.authorization.k8s.io/v1
-          kind: RoleBinding
-          metadata:
-            name: eso-secret-reader
-            namespace: rickandmorty
-          roleRef:
-            apiGroup: rbac.authorization.k8s.io
-            kind: Role
-            name: eso-secret-reader
-          subjects:
-            - kind: ServiceAccount
-              name: external-secrets
-              namespace: external-secrets
-          EOF
-
+      # ESO ServiceAccount is now in rickandmorty — no cross-namespace RBAC needed.
       - name: Apply SecretStore
         run: |
           kubectl apply -f - <<'EOF'
@@ -435,7 +407,7 @@ jobs:
                 auth:
                   serviceAccount:
                     name: external-secrets
-                    namespace: external-secrets
+                    namespace: rickandmorty
           EOF
 
       - name: Apply ExternalSecret
@@ -572,4 +544,4 @@ jobs:
 
           echo "=== ESO logs ==="
           kubectl logs -l app.kubernetes.io/name=external-secrets \
-            -n external-secrets --tail=50 || true
+            -n ${{ env.K8S_NAMESPACE }} --tail=50 || true
