@@ -228,8 +228,8 @@ jobs:
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
 
     steps:
-      - name: Set current date as environment variable
-        run: echo "NOW=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
+      #- name: Set current date as environment variable
+      #  run: echo "NOW=$(date +'%Y-%m-%d')" >> $GITHUB_ENV
 
       - name: Checkout code
         uses: actions/checkout@v4
@@ -248,10 +248,11 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE_NAME }}
-          tags: |
-            type=sha,prefix=sha-
-            type=ref,event=branch
-            type=raw,value=build-${{ env.NOW }},enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
+          tags: type=raw,value=build-{{date 'YYYYMMDD-HHmm'}}-{{sha}}
+          #tags: |
+          #  type=sha,prefix=sha-
+          #  type=ref,event=branch
+          #  type=raw,value=build-${{ env.NOW }},enable=${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' }}
 
       - name: Build and push image
         uses: docker/build-push-action@v5
