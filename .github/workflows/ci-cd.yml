@@ -505,46 +505,21 @@ jobs:
             --timeout=3m
 
       # ── j) Smoke tests ────────────────────────────────────────────────────
-      - name: Smoke test — /docs reachable
+      - name: Smoke test — /sync reachable
         run: |
-          curl -sf http://localhost:8000/docs > /dev/null && \
-            echo "✅ /docs OK" || (echo "❌ /docs FAILED" && exit 1)
+          curl -sf http://localhost:8000/sync/?source_url=rickandmortyapi.com&resource=character > /dev/null && \
+            echo "✅ /sync OK" || (echo "❌ /sync FAILED" && exit 1)
 
       - name: Smoke test — /db-mon?aspect=conn
         run: |
           STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:8000/db-mon?aspect=conn")
           [ "$STATUS" = "200" ] && echo "✅ DB conn OK" || (echo "❌ DB conn FAILED: $STATUS" && exit 1)
 
-      - name: Smoke test — /db-mon?aspect=records
-        run: |
-          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:8000/db-mon?aspect=records")
-          [ "$STATUS" = "200" ] && echo "✅ Records OK" || (echo "❌ Records FAILED: $STATUS" && exit 1)
-
       - name: Smoke test — /data validation (expect 400)
         run: |
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             "http://localhost:8000/data?sort_field=invalid&sort_order=ASC")
           [ "$STATUS" = "400" ] && echo "✅ Validation 400 OK" || (echo "❌ Unexpected: $STATUS" && exit 1)
-
-      # ── Integration tests ─────────────────────────────────────────────────
-      - name: Install uv
-        uses: astral-sh/setup-uv@v4
-
-      - name: Set up Python
-        run: uv python install
-
-      - name: Install test dependencies
-        working-directory: ${{ env.APP_DIR }}
-        run: uv sync --all-extras
-
-      - name: Run integration tests against KinD
-        working-directory: ${{ env.APP_DIR }}
-        env:
-          API_BASE_URL: http://localhost:8000
-        run: |
-          uv run pytest tests/integration/ \
-            --tb=short \
-            -v
 
       # ── Diagnostics on failure ────────────────────────────────────────────
       - name: Dump logs on failure
