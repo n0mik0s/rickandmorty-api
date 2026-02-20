@@ -41,16 +41,10 @@ config:
   log_level: INFO   # DEBUG | INFO | WARNING | ERROR
 
 # ── External Secrets Operator ─────────────────────────────────────────────────
-# ── External Secrets (applied via kubectl in CI, NOT via Helm) ───────────────
-# SecretStore and ExternalSecret are kept out of the Helm chart to avoid the
-# "no matches for kind ExternalSecret" Helm validation error.
-# These values are still used by:
-#   - deployment.yaml  → mounts externalSecret.targetSecretName as a volume
-#   - rbac.yaml        → restricts Role to only externalSecret.sourceSecretName
+# ── External Secret target (applied via kubectl in CI, NOT via Helm) ────────
+# SecretStore and ExternalSecret are managed in CI via kubectl.
+# Only targetSecretName is needed here — deployment.yaml mounts it as a volume.
 externalSecret:
-  # The K8s Secret pushed by GitHub Actions (source for ESO).
-  sourceSecretName: rickandmorty-db-raw
-
   # The K8s Secret that ESO creates and the pod mounts as secrets.json.
   targetSecretName: rickandmorty-db-secret
 

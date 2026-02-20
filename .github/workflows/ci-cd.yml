@@ -383,21 +383,50 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -f -
 
       # ── f) Apply ESO resources via kubectl (NOT via Helm) ─────────────────
-      # Helm validates all chart resources against the API server at install time.
-      # Keeping ExternalSecret and SecretStore out of the Helm chart prevents
-      # the "no matches for kind" error regardless of CRD timing.
+      # SecretStore is namespace-scoped and must live in the SAME namespace as
+      # the ExternalSecret (rickandmorty) — NOT in the ESO controller namespace
+      # (external-secrets). The ESO controller's ServiceAccount needs a
+      # RoleBinding in rickandmorty to read the source Secret.
+      - name: Grant ESO controller access to rickandmorty namespace
+        run: |
+          kubectl apply -f - <<'EOF'
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: Role
+          metadata:
+            name: eso-secret-reader
+            namespace: rickandmorty
+          rules:
+            - apiGroups: [""]
+              resources: ["secrets"]
+              verbs: ["get", "list", "watch"]
+          ---
+          apiVersion: rbac.authorization.k8s.io/v1
+          kind: RoleBinding
+          metadata:
+            name: eso-secret-reader
+            namespace: rickandmorty
+          roleRef:
+            apiGroup: rbac.authorization.k8s.io
+            kind: Role
+            name: eso-secret-reader
+          subjects:
+            - kind: ServiceAccount
+              name: external-secrets
+              namespace: external-secrets
+          EOF
+
       - name: Apply SecretStore
         run: |
-          kubectl apply -f - << 'EOF'
+          kubectl apply -f - <<'EOF'
           apiVersion: external-secrets.io/v1beta1
           kind: SecretStore
           metadata:
             name: rickandmorty-secret-store
-            namespace: ${{ env.K8S_NAMESPACE }}
+            namespace: rickandmorty
           spec:
             provider:
               kubernetes:
-                remoteNamespace: ${{ env.K8S_NAMESPACE }}
+                remoteNamespace: rickandmorty
                 server:
                   caProvider:
                     type: ConfigMap
@@ -405,17 +434,18 @@ jobs:
                     key: ca.crt
                 auth:
                   serviceAccount:
-                    name: rickandmorty-api
+                    name: external-secrets
+                    namespace: external-secrets
           EOF
 
       - name: Apply ExternalSecret
         run: |
-          kubectl apply -f - << 'EOF'
+          kubectl apply -f - <<'EOF'
           apiVersion: external-secrets.io/v1beta1
           kind: ExternalSecret
           metadata:
             name: rickandmorty-api-db
-            namespace: ${{ env.K8S_NAMESPACE }}
+            namespace: rickandmorty
           spec:
             refreshInterval: 1h
             secretStoreRef:
