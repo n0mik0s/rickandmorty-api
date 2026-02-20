@@ -48,6 +48,7 @@ externalSecrets:
     name: rickandmorty-secret-store
   externalSecret:
     name: rickandmorty-api-db
+    targetSecretName: rickandmorty-db-secret
 
 # ── Kubernetes Service ───────────────────────────────────────────────────────
 service:
