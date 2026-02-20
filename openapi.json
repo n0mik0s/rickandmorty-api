@@ -1,0 +1,394 @@
+openapi: 3.0.3
+
+info:
+  title: Rick and Morty API
+  description: |
+    A FastAPI service that synchronises character data from the Rick and Morty
+    public API into a PostgreSQL database and exposes endpoints to query and
+    monitor that data.
+
+    ## Authentication
+    No authentication is required. All endpoints are protected only by a
+    built-in rate limiter (50 requests / second per endpoint).
+
+    ## Rate Limiting
+    Every endpoint enforces **50 requests per second**. Requests that exceed
+    this limit receive a `429 Too Many Requests` response.
+
+    ## Running locally
+    ```bash
+    python main.py --config path/to/config.yaml --secret path/to/secrets.json
+    ```
+    The service listens on `http://0.0.0.0:8000` by default.
+  version: "1.0.0"
+  contact:
+    name: rickandmorty-api
+
+servers:
+  - url: http://localhost:8000
+    description: Local development server
+
+tags:
+  - name: Sync
+    description: Fetch characters from an external Rick and Morty source and persist them to the database.
+  - name: Data
+    description: Query the locally stored character records.
+  - name: Monitoring
+    description: Database health and record-count checks.
+
+paths:
+
+  # ───────────────────────────────────────────────────────────────────────────
+  /sync:
+  # ───────────────────────────────────────────────────────────────────────────
+    post:
+      tags: [Sync]
+      summary: Synchronise characters from an external API
+      description: |
+        Fetches all **Human**, **alive** characters whose origin is **Earth**
+        from a paginated Rick and Morty-compatible API and upserts them into
+        the local `character` table.
+
+        Pagination is followed automatically until all pages are consumed.
+        Records that already exist (matched by `id`) are skipped
+        (`ON CONFLICT DO NOTHING`).
+
+        **Note:** the endpoint makes outbound HTTP requests to
+        `https://{source_url}/api/{resource}` and will return an empty success
+        response (with `records_synced: 0`) if the remote API returns no
+        matching characters or is unreachable.
+      operationId: sync_data
+      parameters:
+        - name: source_url
+          in: query
+          required: true
+          description: |
+            Hostname (without scheme) of the Rick and Morty-compatible API to
+            fetch from.  
+            Example: `rickandmortyapi.com`
+          schema:
+            type: string
+            example: rickandmortyapi.com
+        - name: resource
+          in: query
+          required: true
+          description: |
+            API resource path segment to query.  
+            Example: `character`
+          schema:
+            type: string
+            example: character
+      responses:
+        "201":
+          description: Sync completed successfully.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SyncSuccess"
+              example:
+                status: success
+                records_synced: 42
+        "400":
+          description: The data returned by the remote API could not be stored (invalid format).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              example:
+                detail: "Invalid data format: ..."
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  /data:
+  # ───────────────────────────────────────────────────────────────────────────
+    get:
+      tags: [Data]
+      summary: Retrieve stored character records
+      description: |
+        Returns all character records currently stored in the `character` table,
+        ordered by the requested field and direction.
+
+        Each element in the returned array is the raw JSONB document stored
+        during a `/sync` call (i.e. the full character object as returned by
+        the remote Rick and Morty API).
+      operationId: get_data
+      parameters:
+        - name: sort_field
+          in: query
+          required: true
+          description: Column to sort by. Must be `id` or `data`.
+          schema:
+            type: string
+            enum: [id, data]
+          example: id
+        - name: sort_order
+          in: query
+          required: true
+          description: Sort direction. Case-insensitive.
+          schema:
+            type: string
+            enum: [ASC, DESC, asc, desc]
+          example: ASC
+      responses:
+        "200":
+          description: List of character JSONB documents (may be empty).
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Character"
+              example:
+                - id: 1
+                  name: Rick Sanchez
+                  status: Alive
+                  species: Human
+                  origin:
+                    name: Earth (C-137)
+                  location:
+                    name: Citadel of Ricks
+        "400":
+          description: |
+            `sort_order` is not `ASC`/`DESC`, or `sort_field` is not `id`/`data`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              examples:
+                invalidSortOrder:
+                  summary: Invalid sort_order value
+                  value:
+                    detail: Sort order must be ASC or DESC
+                invalidSortField:
+                  summary: Invalid sort_field value
+                  value:
+                    detail: Sort field must be id or data
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          $ref: "#/components/responses/InternalServerError"
+
+  # ───────────────────────────────────────────────────────────────────────────
+  /db-mon:
+  # ───────────────────────────────────────────────────────────────────────────
+    get:
+      tags: [Monitoring]
+      summary: Database monitoring
+      description: |
+        Runs a lightweight database check based on the requested `aspect`.
+
+        | `aspect`  | What it checks |
+        |-----------|----------------|
+        | `conn`    | Opens a connection and executes `SELECT 1` to verify connectivity. |
+        | `records` | Returns the total number of rows in the `character` table. |
+      operationId: monitoring
+      parameters:
+        - name: aspect
+          in: query
+          required: true
+          description: The monitoring check to perform.
+          schema:
+            type: string
+            enum: [conn, records]
+          example: conn
+      responses:
+        "200":
+          description: Check passed.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/MonitoringConnOk"
+                  - $ref: "#/components/schemas/MonitoringRecordsOk"
+              examples:
+                connOk:
+                  summary: "aspect=conn — database reachable"
+                  value: {}
+                recordsOk:
+                  summary: "aspect=records — record count"
+                  value:
+                    records: 42
+        "400":
+          description: The `aspect` value is not recognised.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorDetail"
+              example:
+                detail: Unrecognized aspect
+        "422":
+          $ref: "#/components/responses/UnprocessableEntity"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+        "500":
+          description: |
+            Database is unreachable or returned an error.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmptyObject"
+              example: {}
+
+# ─────────────────────────────────────────────────────────────────────────────
+components:
+# ─────────────────────────────────────────────────────────────────────────────
+
+  schemas:
+
+    SyncSuccess:
+      type: object
+      required: [status, records_synced]
+      properties:
+        status:
+          type: string
+          enum: [success]
+          example: success
+        records_synced:
+          type: integer
+          description: Number of new records inserted during this sync run.
+          example: 42
+
+    Character:
+      type: object
+      description: |
+        Raw JSONB document as returned by the Rick and Morty API and stored
+        in the database. The full schema mirrors the upstream API response.
+      properties:
+        id:
+          type: integer
+          example: 1
+        name:
+          type: string
+          example: Rick Sanchez
+        status:
+          type: string
+          example: Alive
+        species:
+          type: string
+          example: Human
+        type:
+          type: string
+          example: ""
+        gender:
+          type: string
+          example: Male
+        origin:
+          type: object
+          properties:
+            name:
+              type: string
+              example: Earth (C-137)
+            url:
+              type: string
+              format: uri
+        location:
+          type: object
+          properties:
+            name:
+              type: string
+              example: Citadel of Ricks
+            url:
+              type: string
+              format: uri
+        image:
+          type: string
+          format: uri
+          example: https://rickandmortyapi.com/api/character/avatar/1.jpeg
+        episode:
+          type: array
+          items:
+            type: string
+            format: uri
+        url:
+          type: string
+          format: uri
+        created:
+          type: string
+          format: date-time
+
+    MonitoringConnOk:
+      type: object
+      description: Empty object returned when the DB connection check passes.
+      example: {}
+
+    MonitoringRecordsOk:
+      type: object
+      required: [records]
+      properties:
+        records:
+          type: integer
+          description: Total number of rows in the character table.
+          example: 42
+
+    EmptyObject:
+      type: object
+      description: Empty JSON object.
+      example: {}
+
+    ErrorDetail:
+      type: object
+      required: [detail]
+      properties:
+        detail:
+          type: string
+          description: Human-readable description of the error.
+          example: Sort order must be ASC or DESC
+
+    ValidationError:
+      type: object
+      properties:
+        detail:
+          type: array
+          items:
+            type: object
+            properties:
+              loc:
+                type: array
+                items:
+                  type: string
+                example: [query, sort_field]
+              msg:
+                type: string
+                example: field required
+              type:
+                type: string
+                example: value_error.missing
+
+  responses:
+
+    UnprocessableEntity:
+      description: One or more required query parameters are missing or have an invalid type.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ValidationError"
+          example:
+            detail:
+              - loc: [query, sort_field]
+                msg: field required
+                type: value_error.missing
+
+    TooManyRequests:
+      description: Rate limit exceeded (50 requests / second).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+          example:
+            detail: Too Many Requests
+
+    InternalServerError:
+      description: Unexpected server-side error (e.g. database connectivity issue).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorDetail"
+          example:
+            detail: Internal Server Error
