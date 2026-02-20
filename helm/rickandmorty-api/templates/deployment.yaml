@@ -107,7 +107,7 @@ spec:
         - name: app-secret
           secret:
             # This Secret is created and kept in sync by ESO (ExternalSecret)
-            secretName: {{ .Values.externalSecrets.externalSecret.targetSecretName }}
+            secretName: {{ .Values.externalSecret.targetSecretName }}
         - name: tmp
           emptyDir: {}
         {{- with .Values.extraVolumes }}

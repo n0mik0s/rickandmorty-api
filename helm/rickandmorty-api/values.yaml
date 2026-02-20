@@ -19,7 +19,7 @@ replicaCount: 2
 # ── Container image ──────────────────────────────────────────────────────────
 image:
   repository: docker.io/youruser/rickandmorty-api
-  tag: "build-20260220-0839-4a60fde"
+  tag: "build-20260220-1104-ad599d4"
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
@@ -41,22 +41,18 @@ config:
   log_level: INFO   # DEBUG | INFO | WARNING | ERROR
 
 # ── External Secrets Operator ─────────────────────────────────────────────────
-externalSecrets:
-  # Name of the Kubernetes Secret that GitHub Actions creates in the namespace.
-  # It must contain a single key whose value is the full secrets.json JSON string.
-  sourceSecretName: eso-source-secret   # created by CI, not by this chart
-  sourceSecretKey: secrets.json         # key inside that Kubernetes Secret
+# ── External Secrets (applied via kubectl in CI, NOT via Helm) ───────────────
+# SecretStore and ExternalSecret are kept out of the Helm chart to avoid the
+# "no matches for kind ExternalSecret" Helm validation error.
+# These values are still used by:
+#   - deployment.yaml  → mounts externalSecret.targetSecretName as a volume
+#   - rbac.yaml        → restricts Role to only externalSecret.sourceSecretName
+externalSecret:
+  # The K8s Secret pushed by GitHub Actions (source for ESO).
+  sourceSecretName: rickandmorty-db-raw
 
-  # SecretStore (namespace-scoped)
-  secretStore:
-    name: rickandmorty-fake-store
-
-  # ExternalSecret — the ESO resource that reads from the store
-  externalSecret:
-    name: rickandmorty-db-secret
-    refreshInterval: 1h
-    # Name of the Kubernetes Secret ESO will create/sync
-    targetSecretName: rickandmorty-db-secret
+  # The K8s Secret that ESO creates and the pod mounts as secrets.json.
+  targetSecretName: rickandmorty-db-secret
 
 # ── Kubernetes Service ───────────────────────────────────────────────────────
 service:

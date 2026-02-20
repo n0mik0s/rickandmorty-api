@@ -270,18 +270,24 @@ jobs:
 # ───────────────────────────────────────────────────────────────────────────
   # 5. Deploy to KinD
   #
+  # Why SecretStore and ExternalSecret are applied via kubectl and NOT via Helm:
+  # Helm validates all chart resources against the live API server before apply.
+  # If the ESO CRDs are not yet registered, Helm fails with:
+  #   "no matches for kind ExternalSecret in version external-secrets.io/v1beta1"
+  # Solution: keep the Helm chart free of ESO custom resources; apply them
+  # with kubectl AFTER explicitly confirming the CRDs are Established.
+  #
   # Flow:
-  #   a) Spin up a KinD cluster
-  #   b) Load the freshly-built image into KinD (no registry pull needed)
+  #   a) Write KinD config file and create cluster
+  #   b) Build and load app image into KinD
   #   c) Install cert-manager (ESO hard dependency)
-  #   d) Install External Secrets Operator via Helm
-  #   e) Create the namespace
-  #   f) Push RICKANDMORTY_DB_SECRET → plain K8s Secret (source for ESO)
-  #   g) Helm install the app chart (which creates SecretStore + ExternalSecret)
-  #   h) Wait for ESO to sync the ExternalSecret
-  #   i) Wait for the Deployment to be fully ready
-  #   j) Smoke-test endpoints with curl
-  #   k) Run the full integration test suite against the cluster
+  #   d) Install ESO via Helm + wait for CRDs to be Established
+  #   e) Create namespace + push raw secret
+  #   f) Apply SecretStore and ExternalSecret via kubectl
+  #   g) Deploy PostgreSQL
+  #   h) Helm install app chart (no ESO kinds — safe to validate)
+  #   i) Wait for ESO sync + Deployment rollout
+  #   j) Smoke tests + integration tests
   # ───────────────────────────────────────────────────────────────────────────
   deploy-kind:
     name: Deploy to KinD
@@ -293,9 +299,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── a) Spin up KinD ────────────────────────────────────────────────────
-      # kind-action requires a file path for config, not inline YAML.
-      # Write the cluster config to disk first, then reference it.
+      # ── a) KinD cluster ───────────────────────────────────────────────────
       - name: Write KinD cluster config
         run: |
           cat > /tmp/kind-config.yaml << 'EOF'
@@ -315,8 +319,7 @@ jobs:
           cluster_name: rickandmorty
           config: /tmp/kind-config.yaml
 
-      # ── b) Load the app image into KinD ───────────────────────────────────
-      # Avoids a Docker Hub pull; uses the image built in build-and-test.
+      # ── b) Build and load app image ───────────────────────────────────────
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -332,7 +335,7 @@ jobs:
       - name: Load image into KinD
         run: kind load docker-image ${{ env.IMAGE_NAME }}:kind --name rickandmorty
 
-      # ── c) Install cert-manager (required by ESO) ─────────────────────────
+      # ── c) cert-manager ───────────────────────────────────────────────────
       - name: Install cert-manager
         run: |
           helm repo add jetstack https://charts.jetstack.io --force-update
@@ -343,7 +346,7 @@ jobs:
             --wait \
             --timeout 3m
 
-      # ── d) Install External Secrets Operator ──────────────────────────────
+      # ── d) ESO + wait for CRDs ────────────────────────────────────────────
       - name: Install External Secrets Operator
         run: |
           helm repo add external-secrets https://charts.external-secrets.io --force-update
@@ -354,10 +357,9 @@ jobs:
             --wait \
             --timeout 3m
 
-      # Wait until ESO CRDs are fully established in the API server before
-      # installing the app chart — otherwise Helm cannot resolve ExternalSecret
-      # and throws "no matches for kind ExternalSecret in version external-secrets.io/v1beta1".
-      - name: Wait for ESO CRDs to be established
+      # kubectl wait for CRD Established is the only reliable gate —
+      # helm --wait only tracks pod readiness, not CRD registration.
+      - name: Wait for ESO CRDs to be Established
         run: |
           for crd in \
             externalsecrets.external-secrets.io \
@@ -367,14 +369,10 @@ jobs:
             kubectl wait --for=condition=Established crd/$crd --timeout=60s
           done
 
-      # ── e) Create app namespace ────────────────────────────────────────────
+      # ── e) Namespace + raw secret ─────────────────────────────────────────
       - name: Create namespace
         run: kubectl create namespace ${{ env.K8S_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
 
-      # ── f) Push raw secret into the cluster ───────────────────────────────
-      # RICKANDMORTY_DB_SECRET holds the full secrets.json JSON string, e.g.:
-      #   {"host":"postgres","user":"rickandmorty","password":"s3cr3t","dbname":"rickandmorty"}
-      # The ESO ExternalSecret reads this K8s Secret via the Kubernetes provider.
       - name: Push db secret to cluster
         env:
           DB_SECRET_JSON: ${{ secrets.RICKANDMORTY_DB_SECRET }}
@@ -384,8 +382,60 @@ jobs:
             --namespace ${{ env.K8S_NAMESPACE }} \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      # ── g) Deploy PostgreSQL into KinD ────────────────────────────────────
-      # The app needs a real Postgres — deploy a minimal one into the cluster.
+      # ── f) Apply ESO resources via kubectl (NOT via Helm) ─────────────────
+      # Helm validates all chart resources against the API server at install time.
+      # Keeping ExternalSecret and SecretStore out of the Helm chart prevents
+      # the "no matches for kind" error regardless of CRD timing.
+      - name: Apply SecretStore
+        run: |
+          kubectl apply -f - << 'EOF'
+          apiVersion: external-secrets.io/v1beta1
+          kind: SecretStore
+          metadata:
+            name: rickandmorty-secret-store
+            namespace: ${{ env.K8S_NAMESPACE }}
+          spec:
+            provider:
+              kubernetes:
+                remoteNamespace: ${{ env.K8S_NAMESPACE }}
+                server:
+                  caProvider:
+                    type: ConfigMap
+                    name: kube-root-ca.crt
+                    key: ca.crt
+                auth:
+                  serviceAccount:
+                    name: rickandmorty-api
+          EOF
+
+      - name: Apply ExternalSecret
+        run: |
+          kubectl apply -f - << 'EOF'
+          apiVersion: external-secrets.io/v1beta1
+          kind: ExternalSecret
+          metadata:
+            name: rickandmorty-api-db
+            namespace: ${{ env.K8S_NAMESPACE }}
+          spec:
+            refreshInterval: 1h
+            secretStoreRef:
+              kind: SecretStore
+              name: rickandmorty-secret-store
+            target:
+              name: rickandmorty-db-secret
+              creationPolicy: Owner
+              template:
+                type: Opaque
+                data:
+                  secrets.json: "{{ .secretsJson }}"
+            data:
+              - secretKey: secretsJson
+                remoteRef:
+                  key: rickandmorty-db-raw
+                  property: secrets.json
+          EOF
+
+      # ── g) PostgreSQL ─────────────────────────────────────────────────────
       - name: Deploy PostgreSQL
         run: |
           helm repo add bitnami https://charts.bitnami.com/bitnami --force-update
@@ -397,7 +447,7 @@ jobs:
             --wait \
             --timeout 3m
 
-      # ── h) Helm install the app chart ─────────────────────────────────────
+      # ── h) Helm install app chart (ESO kinds removed — safe to validate) ──
       - name: Helm install rickandmorty-api
         run: |
           helm upgrade --install rickandmorty-api ./helm/rickandmorty-api \
@@ -408,39 +458,33 @@ jobs:
             --set service.type=NodePort \
             --set service.nodePort=30800 \
             --set config.log_level=INFO \
-            --set externalSecret.secretStoreName=rickandmorty-secret-store \
-            --set externalSecret.sourceSecretName=rickandmorty-db-raw \
             --set externalSecret.targetSecretName=rickandmorty-db-secret \
-            --set 'dbSecret.host=postgres-postgresql.${{ env.K8S_NAMESPACE }}.svc.cluster.local' \
             --wait \
             --timeout 5m
 
-      # ── i) Wait for ESO to sync the ExternalSecret ────────────────────────
+      # ── i) Wait for ESO sync + rollout ───────────────────────────────────
       - name: Wait for ExternalSecret to sync
         run: |
-          echo "Waiting for ExternalSecret to reach Ready state..."
           for i in $(seq 1 24); do
             STATUS=$(kubectl get externalsecret rickandmorty-api-db \
               -n ${{ env.K8S_NAMESPACE }} \
               -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
             if [ "$STATUS" = "True" ]; then
-              echo "ExternalSecret synced successfully."
+              echo "ExternalSecret synced."
               break
             fi
-            echo "Attempt $i/24 — current status: '${STATUS}'. Retrying in 5s..."
+            echo "Attempt $i/24 — status: '${STATUS}'. Retrying in 5s..."
             sleep 5
           done
-          # Print full status for debugging regardless
           kubectl get externalsecret -n ${{ env.K8S_NAMESPACE }}
 
-      # ── j) Wait for the Deployment rollout ────────────────────────────────
       - name: Wait for Deployment rollout
         run: |
           kubectl rollout status deployment/rickandmorty-api \
             --namespace ${{ env.K8S_NAMESPACE }} \
             --timeout=3m
 
-      # ── k) Smoke-test endpoints with curl ─────────────────────────────────
+      # ── j) Smoke tests ────────────────────────────────────────────────────
       - name: Smoke test — /docs reachable
         run: |
           curl -sf http://localhost:8000/docs > /dev/null && \
@@ -448,24 +492,21 @@ jobs:
 
       - name: Smoke test — /db-mon?aspect=conn
         run: |
-          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8000/db-mon?aspect=conn)
-          echo "Response: $STATUS"
-          [ "$STATUS" = "200" ] && echo "✅ DB connection OK" || (echo "❌ DB connection FAILED" && exit 1)
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:8000/db-mon?aspect=conn")
+          [ "$STATUS" = "200" ] && echo "✅ DB conn OK" || (echo "❌ DB conn FAILED: $STATUS" && exit 1)
 
       - name: Smoke test — /db-mon?aspect=records
         run: |
-          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" http://localhost:8000/db-mon?aspect=records)
-          echo "Response: $STATUS"
-          [ "$STATUS" = "200" ] && echo "✅ Records endpoint OK" || (echo "❌ Records endpoint FAILED" && exit 1)
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:8000/db-mon?aspect=records")
+          [ "$STATUS" = "200" ] && echo "✅ Records OK" || (echo "❌ Records FAILED: $STATUS" && exit 1)
 
       - name: Smoke test — /data validation (expect 400)
         run: |
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             "http://localhost:8000/data?sort_field=invalid&sort_order=ASC")
-          echo "Response: $STATUS"
-          [ "$STATUS" = "400" ] && echo "✅ Validation returns 400 OK" || (echo "❌ Unexpected status $STATUS" && exit 1)
+          [ "$STATUS" = "400" ] && echo "✅ Validation 400 OK" || (echo "❌ Unexpected: $STATUS" && exit 1)
 
-      # ── l) Full integration test suite against KinD ───────────────────────
+      # ── Integration tests ─────────────────────────────────────────────────
       - name: Install uv
         uses: astral-sh/setup-uv@v4
 
@@ -485,20 +526,20 @@ jobs:
             --tb=short \
             -v
 
-      # ── Diagnostics on failure ─────────────────────────────────────────────
-      - name: Dump pod logs on failure
+      # ── Diagnostics on failure ────────────────────────────────────────────
+      - name: Dump logs on failure
         if: failure()
         run: |
           echo "=== Pods ==="
           kubectl get pods -n ${{ env.K8S_NAMESPACE }}
 
-          echo "=== ExternalSecret status ==="
-          kubectl describe externalsecret -n ${{ env.K8S_NAMESPACE }}
+          echo "=== ExternalSecret ==="
+          kubectl describe externalsecret -n ${{ env.K8S_NAMESPACE }} || true
 
-          echo "=== App pod logs ==="
+          echo "=== App logs ==="
           kubectl logs -l app.kubernetes.io/name=rickandmorty-api \
             -n ${{ env.K8S_NAMESPACE }} --tail=100 || true
 
-          echo "=== ESO controller logs ==="
+          echo "=== ESO logs ==="
           kubectl logs -l app.kubernetes.io/name=external-secrets \
             -n external-secrets --tail=50 || true
