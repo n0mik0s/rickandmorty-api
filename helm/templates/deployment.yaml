@@ -1,0 +1,130 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "rickandmorty-api.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rickandmorty-api.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "rickandmorty-api.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "rickandmorty-api.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      annotations:
+        # Force pod rollout whenever the ConfigMap content changes
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "rickandmorty-api.serviceAccountName" . }}
+
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+
+      containers:
+        - name: {{ .Chart.Name }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+
+          securityContext:
+            {{- toYaml .Values.containerSecurityContext | nindent 12 }}
+
+          args:
+            - "--config"
+            - {{ .Values.app.configPath | quote }}
+            - "--secret"
+            - {{ .Values.app.secretPath | quote }}
+
+          ports:
+            - name: http
+              containerPort: 8000
+              protocol: TCP
+
+          {{- if .Values.probes.liveness.enabled }}
+          livenessProbe:
+            httpGet:
+              path: {{ .Values.probes.liveness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.liveness.initialDelaySeconds }}
+            periodSeconds:       {{ .Values.probes.liveness.periodSeconds }}
+            timeoutSeconds:      {{ .Values.probes.liveness.timeoutSeconds }}
+            failureThreshold:    {{ .Values.probes.liveness.failureThreshold }}
+          {{- end }}
+
+          {{- if .Values.probes.readiness.enabled }}
+          readinessProbe:
+            httpGet:
+              path: {{ .Values.probes.readiness.path }}
+              port: http
+            initialDelaySeconds: {{ .Values.probes.readiness.initialDelaySeconds }}
+            periodSeconds:       {{ .Values.probes.readiness.periodSeconds }}
+            timeoutSeconds:      {{ .Values.probes.readiness.timeoutSeconds }}
+            failureThreshold:    {{ .Values.probes.readiness.failureThreshold }}
+          {{- end }}
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          {{- with .Values.extraEnv }}
+          env:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+
+          volumeMounts:
+            # config.yaml — from ConfigMap (non-sensitive)
+            - name: app-config
+              mountPath: {{ .Values.app.configPath | dir }}
+              readOnly: true
+            # secrets.json — from Secret produced by ESO
+            - name: app-secret
+              mountPath: {{ .Values.app.secretPath | dir }}
+              readOnly: true
+            # writable /tmp required by readOnlyRootFilesystem
+            - name: tmp
+              mountPath: /tmp
+            {{- with .Values.extraVolumeMounts }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+
+      volumes:
+        - name: app-config
+          configMap:
+            name: {{ include "rickandmorty-api.configMapName" . }}
+        - name: app-secret
+          secret:
+            # This Secret is created and kept in sync by ESO (ExternalSecret)
+            secretName: {{ .Values.externalSecrets.externalSecret.targetSecretName }}
+        - name: tmp
+          emptyDir: {}
+        {{- with .Values.extraVolumes }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

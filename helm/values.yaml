@@ -1,0 +1,142 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# rickandmorty-api — Helm values
+#
+# Secret flow:
+#   1. GitHub Actions holds the full secrets.json content as a single Actions
+#      secret variable (RICKANDMORTY_DB_SECRET).
+#   2. The CI deploy job creates a Kubernetes Secret (eso-source-secret) in the
+#      target namespace from that variable before running `helm upgrade`.
+#   3. ESO's Fake provider SecretStore reads from that Kubernetes Secret and
+#      produces the application-facing ExternalSecret → Secret.
+#   4. The resulting Secret is mounted into the pod as /etc/rickandmorty/secrets.json.
+#
+# Override any value:
+#   helm upgrade --install rickandmorty-api ./rickandmorty-api -f my-values.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+replicaCount: 2
+
+# ── Container image ──────────────────────────────────────────────────────────
+image:
+  repository: docker.io/youruser/rickandmorty-api
+  tag: "build-20260220-0839-4a60fde"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# ── Service account ──────────────────────────────────────────────────────────
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# ── Application config ───────────────────────────────────────────────────────
+app:
+  # Paths inside the container where files will be mounted
+  configPath: /etc/rickandmorty/config.yaml
+  secretPath: /etc/rickandmorty/secrets.json
+
+# config.yaml content — rendered into a ConfigMap
+config:
+  log_level: INFO   # DEBUG | INFO | WARNING | ERROR
+
+# ── External Secrets Operator ─────────────────────────────────────────────────
+externalSecrets:
+  # Name of the Kubernetes Secret that GitHub Actions creates in the namespace.
+  # It must contain a single key whose value is the full secrets.json JSON string.
+  sourceSecretName: eso-source-secret   # created by CI, not by this chart
+  sourceSecretKey: secrets.json         # key inside that Kubernetes Secret
+
+  # SecretStore (namespace-scoped)
+  secretStore:
+    name: rickandmorty-fake-store
+
+  # ExternalSecret — the ESO resource that reads from the store
+  externalSecret:
+    name: rickandmorty-db-secret
+    refreshInterval: 1h
+    # Name of the Kubernetes Secret ESO will create/sync
+    targetSecretName: rickandmorty-db-secret
+
+# ── Kubernetes Service ───────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 8000
+  nodePort: ""      # only used when type=NodePort, e.g. 30800 for KinD
+
+# ── Ingress ──────────────────────────────────────────────────────────────────
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: rickandmorty-api.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# ── Resources ────────────────────────────────────────────────────────────────
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+# ── Autoscaling ──────────────────────────────────────────────────────────────
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+  targetMemoryUtilizationPercentage: 80
+
+# ── Probes ───────────────────────────────────────────────────────────────────
+probes:
+  liveness:
+    enabled: true
+    path: /db-mon?aspect=conn
+    initialDelaySeconds: 15
+    periodSeconds: 30
+    timeoutSeconds: 5
+    failureThreshold: 3
+  readiness:
+    enabled: true
+    path: /db-mon?aspect=conn
+    initialDelaySeconds: 10
+    periodSeconds: 15
+    timeoutSeconds: 3
+    failureThreshold: 3
+
+# ── Pod disruption budget ─────────────────────────────────────────────────────
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 1
+
+# ── Security contexts ─────────────────────────────────────────────────────────
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+# ── Scheduling ───────────────────────────────────────────────────────────────
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# ── Extra env vars / volumes ─────────────────────────────────────────────────
+extraEnv: []
+extraVolumes: []
+extraVolumeMounts: []
+
+podAnnotations: {}
+podLabels: {}

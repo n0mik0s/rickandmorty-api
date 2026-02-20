@@ -1,0 +1,38 @@
+🚀 rickandmorty-api deployed!
+
+Release  : {{ .Release.Name }}
+Namespace: {{ .Release.Namespace }}
+Image    : {{ .Values.image.repository }}:{{ .Values.image.tag }}
+Replicas : {{ .Values.replicaCount }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  SECRET FLOW (ESO)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  GitHub Actions secret (RICKANDMORTY_DB_SECRET)
+    -> kubectl apply -> {{ .Values.externalSecrets.sourceSecretName }} (CI-managed)
+      -> SecretStore: {{ .Values.externalSecrets.secretStore.name }}
+        -> ExternalSecret: {{ .Values.externalSecrets.externalSecret.name }}
+          -> Secret: {{ .Values.externalSecrets.externalSecret.targetSecretName }}
+            -> mounted at {{ .Values.app.secretPath }}
+
+  Check sync status:
+    kubectl get externalsecret {{ .Values.externalSecrets.externalSecret.name }} \
+      -n {{ .Release.Namespace }}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ACCESS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  Port-forward:
+    kubectl port-forward svc/{{ include "rickandmorty-api.fullname" . }} 8000:{{ .Values.service.port }} -n {{ .Release.Namespace }}
+  Then: http://localhost:8000/docs
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  BEFORE FIRST DEPLOY — push the secret manually if not using CI:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+  kubectl create secret generic {{ .Values.externalSecrets.sourceSecretName }} \
+    --from-literal={{ .Values.externalSecrets.sourceSecretKey }}='{"host":"...","user":"...","password":"...","dbname":"..."}' \
+    --namespace {{ .Release.Namespace }} \
+    --dry-run=client -o yaml | kubectl apply -f -

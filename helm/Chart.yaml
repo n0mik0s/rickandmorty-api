@@ -1,0 +1,15 @@
+apiVersion: v2
+name: rickandmorty-api
+description: >
+  FastAPI service that syncs Rick and Morty character data into PostgreSQL.
+  Secrets are managed via External Secrets Operator (Fake provider) fed from
+  a Kubernetes Secret that GitHub Actions pushes before deployment.
+type: application
+version: 0.1.0
+appVersion: "1.0.0"
+keywords:
+  - fastapi
+  - rickandmorty
+  - python
+maintainers:
+  - name: platform-team

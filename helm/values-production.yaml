@@ -1,0 +1,66 @@
+# values-production.yaml
+# Apply with: helm upgrade --install rickandmorty-api ./rickandmorty-api \
+#               -f values-production.yaml \
+#               --set dbSecret.password=$DB_PASSWORD
+
+replicaCount: 3
+
+image:
+  tag: "sha-abc1234"      # pin to a specific image digest in production
+  pullPolicy: Always
+
+config:
+  log_level: WARNING
+
+# dbSecret.password should be injected at deploy time via CI/CD, e.g.:
+#   --set dbSecret.password=$DB_PASSWORD
+dbSecret:
+  host: postgres.database.svc.cluster.local
+  user: rickandmorty
+  password: REPLACE_ME
+  dbname: rickandmorty
+
+service:
+  type: ClusterIP
+
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+  hosts:
+    - host: rickandmorty-api.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: rickandmorty-tls
+      hosts:
+        - rickandmorty-api.example.com
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 10
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  minAvailable: 2
+
+affinity:
+  podAntiAffinity:
+    requiredDuringSchedulingIgnoredDuringExecution:
+      - labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: rickandmorty-api
+        topologyKey: kubernetes.io/hostname

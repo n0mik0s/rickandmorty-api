@@ -1,0 +1,10 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "rickandmorty-api.configMapName" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "rickandmorty-api.labels" . | nindent 4 }}
+data:
+  config.yaml: |
+    log_level: {{ .Values.config.log_level | quote }}
