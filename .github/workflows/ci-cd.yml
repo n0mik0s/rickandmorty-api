@@ -10,6 +10,8 @@ env:
   REGISTRY: docker.io
   IMAGE_NAME: ${{ secrets.DOCKERHUB_USERNAME }}/rickandmorty-api
   APP_DIR: .
+  # Kubernetes namespace used in every kubectl/helm command
+  K8S_NAMESPACE: rickandmorty
 
 jobs:
   # ─────────────────────────────────────────────
@@ -284,8 +286,6 @@ jobs:
   deploy-kind:
     name: Deploy to KinD
     runs-on: ubuntu-latest
-    env:
-      K8S_NAMESPACE: rickandmorty
     needs: push-image
     if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
 
@@ -353,6 +353,19 @@ jobs:
             --set installCRDs=true \
             --wait \
             --timeout 3m
+
+      # Wait until ESO CRDs are fully established in the API server before
+      # installing the app chart — otherwise Helm cannot resolve ExternalSecret
+      # and throws "no matches for kind ExternalSecret in version external-secrets.io/v1beta1".
+      - name: Wait for ESO CRDs to be established
+        run: |
+          for crd in \
+            externalsecrets.external-secrets.io \
+            secretstores.external-secrets.io \
+            clustersecretstores.external-secrets.io; do
+            echo "Waiting for CRD: $crd"
+            kubectl wait --for=condition=Established crd/$crd --timeout=60s
+          done
 
       # ── e) Create app namespace ────────────────────────────────────────────
       - name: Create namespace
