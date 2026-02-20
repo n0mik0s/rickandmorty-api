@@ -41,12 +41,15 @@ config:
   log_level: INFO   # DEBUG | INFO | WARNING | ERROR
 
 # ── External Secrets Operator ─────────────────────────────────────────────────
-# ── External Secret target (applied via kubectl in CI, NOT via Helm) ────────
-# SecretStore and ExternalSecret are managed in CI via kubectl.
-# Only targetSecretName is needed here — deployment.yaml mounts it as a volume.
-externalSecret:
-  # The K8s Secret that ESO creates and the pod mounts as secrets.json.
-  targetSecretName: rickandmorty-db-secret
+externalSecrets:
+  # The K8s Secret created in CI from GitHub Actions secrets
+  sourceSecretName: rickandmorty-db-raw
+  sourceSecretKey: secrets.json
+  secretStore:
+    name: rickandmorty-secret-store
+  externalSecret:
+    name: rickandmorty-api-db
+    targetSecretName: rickandmorty-db-secret
 
 # ── Kubernetes Service ───────────────────────────────────────────────────────
 service:
