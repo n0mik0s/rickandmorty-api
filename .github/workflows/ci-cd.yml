@@ -652,21 +652,26 @@ jobs:
       - name: Create Grafana dashboards ConfigMap
         run: |
           kubectl config use-context kind-monitoring
+
           kubectl create configmap rickandmorty-api-dashboard \
-            --from-file=rickandmorty-api-dashboard.json=\
-            ./monitoring/grafana/dashboards/rickandmorty-api-dashboard.json \
+            --from-file=rickandmorty-api-dashboard.json=./monitoring/grafana/dashboards/rickandmorty-api-dashboard.json \
             --namespace monitoring \
             --dry-run=client -o yaml \
-            | kubectl label --local -f - grafana_dashboard=1 -o yaml \
             | kubectl apply -f -
+          kubectl label configmap rickandmorty-api-dashboard \
+            grafana_dashboard=1 \
+            --namespace monitoring \
+            --overwrite
 
           kubectl create configmap rickandmorty-cluster-dashboard \
-            --from-file=rickandmorty-cluster-dashboard.json=\
-            ./monitoring/grafana/dashboards/rickandmorty-cluster-dashboard.json \
+            --from-file=rickandmorty-cluster-dashboard.json=./monitoring/grafana/dashboards/rickandmorty-cluster-dashboard.json \
             --namespace monitoring \
             --dry-run=client -o yaml \
-            | kubectl label --local -f - grafana_dashboard=1 -o yaml \
             | kubectl apply -f -
+          kubectl label configmap rickandmorty-cluster-dashboard \
+            grafana_dashboard=1 \
+            --namespace monitoring \
+            --overwrite
 
       # ── q) Verify federation is working ───────────────────────────────────
       - name: Wait for federation scrape to succeed
