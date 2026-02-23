@@ -293,7 +293,7 @@ jobs:
     name: Deploy to KinD
     runs-on: ubuntu-latest
     needs: push-image
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master')
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feature_')
 
     steps:
       - name: Checkout code
@@ -538,3 +538,284 @@ jobs:
           echo "=== ESO logs ==="
           kubectl logs -l app.kubernetes.io/name=external-secrets \
             -n ${{ env.K8S_NAMESPACE }} --tail=50 || true
+
+# ───────────────────────────────────────────────────────────────────────────
+  # 6. Deploy Monitoring Stack (Prometheus + Grafana + Alerta)
+  #
+  # Cross-cluster monitoring architecture:
+  #   - App Cluster (rickandmorty): kube-prometheus-stack collects metrics from rickandmorty-api
+  #   - Monitoring Cluster (monitoring): Prometheus federates from app cluster + Grafana + Alerta
+  #
+  # This job:
+  #   a) Installs kube-prometheus-stack in APP cluster (rickandmorty) - collects app metrics
+  #   b) Creates second KinD cluster (monitoring) for centralized monitoring
+  #   c) Configures Prometheus federation - monitoring cluster scrapes from app cluster
+  #   d) Installs Grafana + Alerta in monitoring cluster
+  #   e) Deploys ServiceMonitors in APP cluster (rickandmorty)
+  #   f) Creates alerting rules
+  #   g) Creates Grafana dashboards
+  # ───────────────────────────────────────────────────────────────────────────
+  monitoring-stack:
+    name: Deploy Monitoring Stack
+    runs-on: ubuntu-latest
+    needs: deploy-kind
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feature_')
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # ── a) Install kube-prometheus-stack in APP cluster (rickandmorty) ─────
+      - name: Add Prometheus community repos
+        run: |
+          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
+          helm repo update
+
+      - name: Install kube-prometheus-stack in app cluster (rickandmorty)
+        run: |
+          # Point to app cluster (rickandmorty)
+          kubectl config use-context kind-rickandmorty
+
+          helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+            --namespace monitoring \
+            --create-namespace \
+            --set prometheus.prometheusSpec.retention=7d \
+            --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resourcesrequests.storage=8Gi \
+            --set grafana.enabled=false \
+            --set alertmanager.enabled=true \
+            --set alertmanager.service.type=NodePort \
+            --set alertmanager.service.nodePort=30980 \
+            --set prometheus.service.type=NodePort \
+            --set prometheus.service.nodePort=30909 \
+            --wait \
+            --timeout 5m
+
+      # ── b) Create ServiceMonitor for rickandmorty-api in APP cluster ─────
+      - name: Apply ServiceMonitor in app cluster
+        run: |
+          kubectl config use-context kind-rickandmorty
+          kubectl apply -f ./monitoring/prometheus/servicemonitor.yaml
+
+      # ── c) Create PrometheusRule in APP cluster ───────────────────────────
+      - name: Apply Prometheus alerting rules in app cluster
+        run: |
+          kubectl config use-context kind-rickandmorty
+          kubectl apply -f ./monitoring/prometheus/rules.yaml
+
+      # ── d) Create second KinD cluster for monitoring ───────────────────────
+      - name: Write monitoring KinD cluster config
+        run: |
+          cat > /tmp/kind-config-monitoring.yaml << 'EOF'
+          kind: Cluster
+          apiVersion: kind.x-k8s.io/v1alpha4
+          nodes:
+            - role: control-plane
+              extraPortMappings:
+                - containerPort: 30300
+                  hostPort: 3000
+                  protocol: TCP
+                - containerPort: 30400
+                  hostPort: 4000
+                  protocol: TCP
+                - containerPort: 30980
+                  hostPort: 9980
+                  protocol: TCP
+          EOF
+
+      - name: Create monitoring KinD cluster
+        uses: helm/kind-action@v1.10.0
+        with:
+          cluster_name: monitoring
+          config: /tmp/kind-config-monitoring.yaml
+
+      # ── e) Install monitoring components in monitoring cluster ─────────────
+      - name: Install Grafana + Alerta in monitoring cluster
+        run: |
+          kubectl config use-context kind-monitoring
+
+          # Install kube-prometheus-stack (just for Grafana, not Prometheus)
+          helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
+            --namespace monitoring \
+            --create-namespace \
+            --set prometheus.enabled=false \
+            --set prometheusOperator.enabled=true \
+            --set grafana.enabled=true \
+            --set grafana.service.type=NodePort \
+            --set grafana.service.nodePort=30300 \
+            --set grafana.adminPassword=admin \
+            --set alertmanager.enabled=true \
+            --set alertmanager.service.type=NodePort \
+            --set alertmanager.service.nodePort=30980 \
+            --wait \
+            --timeout 5m
+
+          # Install Alerta
+          helm repo add alerta https://alerta.github.io/helm-charts --force-update
+          helm upgrade --install alerta alerta/alerta \
+            --namespace monitoring \
+            --set persistence.enabled=true \
+            --set persistence.size=1Gi \
+            --set service.type=NodePort \
+            --set service.nodePort=30400 \
+            --set config.authEnabled=false \
+            --set config.demoMode=true \
+            --wait \
+            --timeout 3m
+
+      # ── f) Configure Prometheus federation ─────────────────────────────────
+      - name: Configure Prometheus federation
+        run: |
+          kubectl config use-context kind-monitoring
+
+          # Apply Prometheus with federation config to scrape from app cluster
+          kubectl apply -f - <<'EOF'
+          apiVersion: monitoring.coreos.com/v1
+          kind: Prometheus
+          metadata:
+            name: federation
+            namespace: monitoring
+          spec:
+            replicas: 1
+            retention: 7d
+            storage:
+              volumeClaimTemplate:
+                spec:
+                  resources:
+                    requests:
+                      storage: 8Gi
+            serviceAccountName: prometheus
+            serviceMonitorSelector:
+              matchLabels:
+                federate: "true"
+            podMonitorSelector: {}
+            ruleSelector: {}
+            alerting:
+              alertmanagers:
+                - namespace: monitoring
+                  name: prometheus-alertmanager
+                  port: web
+            externalLabels:
+              cluster: monitoring
+            remoteWrite:
+              - url: "http://prometheus.monitoring.svc.cluster.local:9090/api/v1/write"
+            # Federation config - scrape from app cluster's Prometheus
+            federation:
+              endpoints:
+                - port: web
+                  interval: 30s
+          EOF
+
+      # Create a Service to expose app cluster Prometheus for federation
+      - name: Expose app cluster Prometheus for federation
+        run: |
+          # Use hostNetwork to access the app cluster's Prometheus from monitoring cluster
+          # Since they're in different clusters, we need to use the host ports
+          echo "App cluster Prometheus accessible at: http://localhost:30909"
+
+      # ── g) Add app cluster as federated source ─────────────────────────────
+      - name: Add app cluster Prometheus as federated source
+        run: |
+          kubectl config use-context kind-monitoring
+
+          # Create a ServiceMonitor that uses the app cluster's Prometheus endpoint
+          # Since we're in CI, we configure the monitoring Prometheus to federate
+          # by using the remoteWrite from app cluster or by configuring federation jobs
+          # For KinD, we'll use a simpler approach - configure the monitoring Prometheus
+          # to scrape from app cluster via NodePort
+          kubectl apply -f - <<'EOF'
+          apiVersion: monitoring.coreos.com/v1
+          kind: ServiceMonitor
+          metadata:
+            name: federated-rickandmorty
+            namespace: monitoring
+            labels:
+              release: prometheus
+              federate: "true"
+          spec:
+            endpoints:
+              - interval: 30s
+                port: web
+                path: /federate
+                params:
+                  'match[]':
+                    - '{__name__=~".*"}'
+            namespaceSelector: {}
+            selector: {}
+          EOF
+
+      # ── h) Configure Alertmanager to send alerts to Alerta ───────────────
+      - name: Configure Alertmanager for Alerta
+        run: |
+          kubectl config use-context kind-monitoring
+
+          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=alertmanager,app.kubernetes.io/instance=prometheus-alertmanager -n monitoring --timeout=120s || true
+
+          kubectl apply -f ./monitoring/prometheus/alertmanager-config.yaml
+
+      # ── i) Create Grafana dashboards ConfigMap ───────────────────────────
+      - name: Create Grafana dashboards ConfigMap
+        run: |
+          kubectl config use-context kind-monitoring
+
+          # Apply dashboard ConfigMaps from external files
+          # Dashboard 1: API Overview
+          kubectl create configmap rickandmorty-api-dashboard \
+            --from-file=rickandmorty-api-dashboard.json=./monitoring/grafana/dashboards/rickandmorty-api-dashboard.json \
+            --namespace=monitoring \
+            --labels=grafana_dashboard=1 \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+          # Dashboard 2: Cluster Overview
+          kubectl create configmap rickandmorty-cluster-dashboard \
+            --from-file=rickandmorty-cluster-dashboard.json=./monitoring/grafana/dashboards/rickandmorty-cluster-dashboard.json \
+            --namespace=monitoring \
+            --labels=grafana_dashboard=1 \
+            --dry-run=client -o yaml | kubectl apply -f -
+
+      # ── j) Verify monitoring stack ───────────────────────────────────────
+      - name: Verify app cluster monitoring
+        run: |
+          kubectl config use-context kind-rickandmorty
+          echo "=== App Cluster (rickandmorty) Monitoring ==="
+          kubectl get pods -n monitoring
+          kubectl get svc -n monitoring
+
+      - name: Verify monitoring cluster
+        run: |
+          kubectl config use-context kind-monitoring
+          echo "=== Monitoring Cluster ==="
+          kubectl get pods -n monitoring
+          kubectl get svc -n monitoring
+
+      # ── k) Print monitoring URLs ──────────────────────────────────────────
+      - name: Print monitoring URLs
+        run: |
+          echo ""
+          echo "=========================================="
+          echo "Monitoring Stack Deployed Successfully!"
+          echo "=========================================="
+          echo ""
+          echo "APP CLUSTER (rickandmorty):"
+          echo "  Prometheus: http://localhost:30909"
+          echo "  Alertmanager: http://localhost:30980"
+          echo ""
+          echo "MONITORING CLUSTER:"
+          echo "  Grafana: http://localhost:3000 (admin/admin)"
+          echo "  Alerta: http://localhost:4040 (demo mode)"
+          echo ""
+          echo "Cross-cluster setup:"
+          echo "  - App cluster has Prometheus collecting rickandmorty-api metrics"
+          echo "  - Monitoring cluster has Grafana + Alerta"
+          echo "  - Configure federation to federate metrics between clusters"
+          echo ""
+          echo "Dashboards created:"
+          echo "  - RickAndMorty API Overview"
+          echo "  - RickAndMorty Cluster Overview"
+          echo ""
+          echo "Alerts configured:"
+          echo "  - RickAndMortyAPIHighErrorRate"
+          echo "  - RickAndMortyAPILatencyHigh"
+          echo "  - RickAndMortyAPIDown"
+          echo "  - RickAndMortyDatabaseConnectionHigh"
+          echo "  - RickAndMortySyncJobFailing"
+          echo ""

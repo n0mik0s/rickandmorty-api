@@ -1,0 +1,68 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: rickandmorty-alerts
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  groups:
+    - name: rickandmorty-api.rules
+      rules:
+        - alert: RickAndMortyAPIHighErrorRate
+          expr: |
+            sum(rate(http_requests_total{service="rickandmorty-api",status=~"5.."}[5m]))
+            /
+            sum(rate(http_requests_total{service="rickandmorty-api"}[5m])) > 0.05
+          for: 5m
+          labels:
+            severity: critical
+            component: api
+          annotations:
+            summary: "RickAndMorty API High Error Rate"
+            description: "API is returning 5xx errors for more than 5% of requests"
+
+        - alert: RickAndMortyAPILatencyHigh
+          expr: |
+            histogram_quantile(0.95, sum(rate(http_request_duration_seconds_bucket{service="rickandmorty-api"}[5m])) by (le))
+            > 2
+          for: 5m
+          labels:
+            severity: warning
+            component: api
+          annotations:
+            summary: "RickAndMorty API High Latency"
+            description: "API p95 latency is above 2 seconds"
+
+        - alert: RickAndMortyAPIDown
+          expr: |
+            up{service="rickandmorty-api"} == 0
+          for: 1m
+          labels:
+            severity: critical
+            component: api
+          annotations:
+            summary: "RickAndMorty API is Down"
+            description: "API has been unreachable for more than 1 minute"
+
+        - alert: RickAndMortyDatabaseConnectionHigh
+          expr: |
+            pg_stat_database_numbackends / pg_settings_max_connections > 0.8
+          for: 5m
+          labels:
+            severity: warning
+            component: database
+          annotations:
+            summary: "RickAndMorty Database High Connection Usage"
+            description: "Database is using more than 80% of max connections"
+
+        - alert: RickAndMortySyncJobFailing
+          expr: |
+            sum(rate(rickandmorty_sync_errors_total[5m])) > 0
+          for: 2m
+          labels:
+            severity: warning
+            component: sync
+          annotations:
+            summary: "RickAndMorty Sync Job Failing"
+            description: "Sync job has reported errors in the last 5 minutes"

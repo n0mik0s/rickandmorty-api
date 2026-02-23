@@ -1,0 +1,19 @@
+apiVersion: monitoring.coreos.com/v1alpha1
+kind: AlertmanagerConfig
+metadata:
+  name: alerta-config
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  route:
+    groupBy: ['alertname', 'namespace']
+    groupWait: 10s
+    groupInterval: 10s
+    repeatInterval: 12h
+    receiver: 'alerta'
+  receivers:
+    - name: 'alerta'
+      webhookConfigs:
+        - url: 'http://alerta-server.monitoring.svc.cluster.local:8080/api/webhooks/prometheus'
+          sendResolved: true
