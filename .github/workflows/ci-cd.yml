@@ -544,6 +544,18 @@ jobs:
           echo "=== ESO logs ==="
           kubectl logs -l app.kubernetes.io/name=external-secrets \
             -n ${{ env.K8S_NAMESPACE }} --tail=50 || true
+      
+      # Save kubeconfig for use in monitoring-stack job
+      - name: Export kubeconfig
+        run: |
+          kind get kubeconfig --name rickandmorty > /tmp/kubeconfig-rickandmorty
+
+      - name: Upload kubeconfig
+        uses: actions/upload-artifact@v4
+        with:
+          name: kubeconfig-rickandmorty
+          path: /tmp/kubeconfig-rickandmorty
+          retention-days: 1
 
 # ───────────────────────────────────────────────────────────────────────────
   # 6. Deploy Monitoring Stack (Prometheus + Grafana + Alerta)
@@ -577,6 +589,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
+      - name: Download kubeconfig
+        uses: actions/download-artifact@v4
+        with:
+          name: kubeconfig-rickandmorty
+          path: /tmp
+
+      # Set up kubectl with the app cluster kubeconfig
+      - name: Setup kubectl for app cluster
+        run: |
+          export KUBECONFIG=/tmp/kubeconfig-rickandmorty
+          kubectl config use-context kind-rickandmorty
+
       # ── a) Install kube-prometheus-stack in APP cluster (rickandmorty) ─────
       - name: Add Prometheus community repos
         run: |
@@ -584,6 +608,8 @@ jobs:
           helm repo update
 
       - name: Install kube-prometheus-stack in app cluster (rickandmorty)
+        env:
+          KUBECONFIG: /tmp/kubeconfig-rickandmorty
         run: |
           # Point to app cluster (rickandmorty)
           kubectl config use-context kind-rickandmorty
@@ -604,12 +630,16 @@ jobs:
 
       # ── b) Create ServiceMonitor for rickandmorty-api in APP cluster ─────
       - name: Apply ServiceMonitor in app cluster
+        env:
+          KUBECONFIG: /tmp/kubeconfig-rickandmorty
         run: |
           kubectl config use-context kind-rickandmorty
           kubectl apply -f ./monitoring/prometheus/servicemonitor.yaml
 
       # ── c) Create PrometheusRule in APP cluster ───────────────────────────
       - name: Apply Prometheus alerting rules in app cluster
+        env:
+          KUBECONFIG: /tmp/kubeconfig-rickandmorty
         run: |
           kubectl config use-context kind-rickandmorty
           kubectl apply -f ./monitoring/prometheus/rules.yaml
