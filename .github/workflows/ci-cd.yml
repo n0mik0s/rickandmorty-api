@@ -292,7 +292,7 @@ jobs:
   deploy-kind:
     name: Deploy to KinD
     runs-on: ubuntu-latest
-    needs: push-image
+    # needs: push-image
     if: >-
       github.event_name == 'push' && 
       (
