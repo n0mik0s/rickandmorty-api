@@ -586,8 +586,6 @@ jobs:
         run: |
           kubectl config use-context kind-monitoring
 
-          # Write the federation scrape config to a temp file to avoid
-          # shell quoting issues when passing JSON with $HOST_IP interpolated.
           cat > /tmp/federation-scrape-config.yaml << EOF
           - job_name: federate-rickandmorty
             honor_labels: true
@@ -618,7 +616,6 @@ jobs:
             --set alertmanager.enabled=true \
             --set alertmanager.service.type=NodePort \
             --set alertmanager.service.nodePort=30980 \
-            --set-file prometheus.prometheusSpec.additionalScrapeConfigsSecret=null \
             --set-json "prometheus.prometheusSpec.additionalScrapeConfigs=$(
               cat /tmp/federation-scrape-config.yaml \
                 | python3 -c 'import sys,json,yaml; print(json.dumps(yaml.safe_load(sys.stdin.read())))'
