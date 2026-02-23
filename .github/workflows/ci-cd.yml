@@ -627,15 +627,14 @@ jobs:
       - name: Install Alerta in monitoring cluster
         run: |
           kubectl config use-context kind-monitoring
-          helm repo add alerta https://alerta.github.io/helm-charts --force-update
-          helm upgrade --install alerta alerta/alerta \
+          helm repo add alerta-web https://hayk96.github.io/alerta-web --force-update
+          helm upgrade --install alerta alerta-web/alerta-web \
             --namespace monitoring \
             --set persistence.enabled=true \
             --set persistence.size=1Gi \
             --set service.type=NodePort \
             --set service.nodePort=30400 \
-            --set config.authEnabled=false \
-            --set config.demoMode=true \
+            --set alertaAuthRequired=false \
             --wait \
             --timeout 3m
 
