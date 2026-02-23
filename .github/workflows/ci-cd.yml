@@ -293,7 +293,13 @@ jobs:
     name: Deploy to KinD
     runs-on: ubuntu-latest
     needs: push-image
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feature_')
+    if: >-
+      github.event_name == 'push' && 
+      (
+        github.ref == 'refs/heads/main' || 
+        github.ref == 'refs/heads/master' || 
+        startsWith(github.ref, 'refs/heads/feature_')
+      )
 
     steps:
       - name: Checkout code
@@ -559,7 +565,13 @@ jobs:
     name: Deploy Monitoring Stack
     runs-on: ubuntu-latest
     needs: deploy-kind
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master' || github.ref == 'refs/heads/feature_')
+    if: >-
+      github.event_name == 'push' && 
+      (
+        github.ref == 'refs/heads/main' || 
+        github.ref == 'refs/heads/master' || 
+        startsWith(github.ref, 'refs/heads/feature_')
+      )
 
     steps:
       - name: Checkout code
@@ -819,4 +831,3 @@ jobs:
           echo "  - RickAndMortyDatabaseConnectionHigh"
           echo "  - RickAndMortySyncJobFailing"
           echo ""
-          
