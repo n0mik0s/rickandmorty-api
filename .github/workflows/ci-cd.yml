@@ -267,32 +267,28 @@ jobs:
           cache-to: type=gha,mode=max
           platforms: linux/amd64,linux/arm64
 
-# ───────────────────────────────────────────────────────────────────────────
-  # 5. Deploy to KinD
+# ─────────────────────────────────────────────────────────────────────────────
+  # 5. Deploy to KinD + Monitoring Stack (merged to share runner)
   #
-  # Why SecretStore and ExternalSecret are applied via kubectl and NOT via Helm:
-  # Helm validates all chart resources against the live API server before apply.
-  # If the ESO CRDs are not yet registered, Helm fails with:
-  #   "no matches for kind ExternalSecret in version external-secrets.io/v1beta1"
-  # Solution: keep the Helm chart free of ESO custom resources; apply them
-  # with kubectl AFTER explicitly confirming the CRDs are Established.
+  # Two KinD clusters on the same runner:
+  #   kind-rickandmorty — app + PostgreSQL + ESO + kube-prometheus-stack (no Grafana)
+  #   kind-monitoring   — Prometheus (federates from app cluster) + Grafana + Alerta
   #
-  # Flow:
-  #   a) Write KinD config file and create cluster
-  #   b) Build and load app image into KinD
-  #   c) Install cert-manager (ESO hard dependency)
-  #   d) Install ESO via Helm + wait for CRDs to be Established
-  #   e) Create namespace + push raw secret
-  #   f) Apply SecretStore and ExternalSecret via kubectl
-  #   g) Deploy PostgreSQL
-  #   h) Helm install app chart (no ESO kinds — safe to validate)
-  #   i) Wait for ESO sync + Deployment rollout
-  #   j) Smoke tests + integration tests
-  # ───────────────────────────────────────────────────────────────────────────
+  # Federation path:
+  #   App cluster Prometheus (NodePort 30909 on host) 
+  #     → reachable at HOST_IP:30909 from inside monitoring cluster pods
+  #     → monitoring Prometheus scrapes /federate endpoint
+  #     → Grafana queries monitoring Prometheus
+  #
+  # Why HOST_IP and not localhost:
+  #   KinD pods run inside Docker containers. From inside a pod, "localhost"
+  #   is the pod itself. The host machine is reachable via the Docker bridge
+  #   gateway IP (typically 172.17.0.1), discovered at runtime.
+  # ─────────────────────────────────────────────────────────────────────────────
   deploy-kind:
-    name: Deploy to KinD
+    name: Deploy to KinD + Monitoring
     runs-on: ubuntu-latest
-    # needs: push-image
+    needs: build-and-test
     if: >-
       github.event_name == 'push' && 
       (
@@ -305,8 +301,8 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      # ── a) KinD cluster ───────────────────────────────────────────────────
-      - name: Write KinD cluster config
+      # ── a) App KinD cluster ───────────────────────────────────────────────
+      - name: Write app KinD cluster config
         run: |
           cat > /tmp/kind-config.yaml << 'EOF'
           kind: Cluster
@@ -317,9 +313,15 @@ jobs:
                 - containerPort: 30800
                   hostPort: 8000
                   protocol: TCP
+                - containerPort: 30909
+                  hostPort: 30909
+                  protocol: TCP
+                - containerPort: 30980
+                  hostPort: 30980
+                  protocol: TCP
           EOF
 
-      - name: Create KinD cluster
+      - name: Create app KinD cluster
         uses: helm/kind-action@v1.10.0
         with:
           cluster_name: rickandmorty
@@ -353,12 +355,11 @@ jobs:
             --timeout 3m
 
       # ── d) ESO + wait for CRDs ────────────────────────────────────────────
-      # Install ESO into the same namespace as the app so its ServiceAccount
-      # exists in rickandmorty and can read secrets there without any
-      # cross-namespace RBAC. CRDs are cluster-scoped so namespace doesn't
-      # affect their availability.
-      - name: Create namespace
-        run: kubectl create namespace ${{ env.K8S_NAMESPACE }} --dry-run=client -o yaml | kubectl apply -f -
+      - name: Create app namespace
+        run: |
+          kubectl config use-context kind-rickandmorty
+          kubectl create namespace ${{ env.K8S_NAMESPACE }} \
+            --dry-run=client -o yaml | kubectl apply -f -
 
       - name: Install External Secrets Operator
         run: |
@@ -369,10 +370,6 @@ jobs:
             --wait \
             --timeout 3m
 
-      # kubectl wait --for=condition=Established confirms the CRD object exists,
-      # but the API server's REST discovery cache can still lag behind.
-      # The only reliable gate is to poll kubectl api-resources until the
-      # SecretStore kind actually appears in the discovery list.
       - name: Wait for ESO CRDs to be Established and discoverable
         run: |
           for crd in \
@@ -384,9 +381,9 @@ jobs:
           done
 
           echo "Polling until SecretStore appears in API discovery..."
-          echo $(kubectl api-resources --api-group=external-secrets.io)
           for i in $(seq 1 30); do
-            if kubectl api-resources --api-group=external-secrets.io 2>/dev/null | grep -q "secretstores.*v1"; then
+            if kubectl api-resources --api-group=external-secrets.io 2>/dev/null \
+                | grep -q "secretstores.*v1"; then
               echo "SecretStore is discoverable after $i attempts."
               break
             fi
@@ -394,7 +391,8 @@ jobs:
             sleep 5
           done
 
-          if ! kubectl api-resources --api-group=external-secrets.io 2>/dev/null | grep -q "secretstores.*v1"; then
+          if ! kubectl api-resources --api-group=external-secrets.io 2>/dev/null \
+              | grep -q "secretstores.*v1"; then
             echo "ERROR: SecretStore never became discoverable."
             exit 1
           fi
@@ -409,8 +407,7 @@ jobs:
             --namespace ${{ env.K8S_NAMESPACE }} \
             --dry-run=client -o yaml | kubectl apply -f -
 
-      # ── f) Apply ESO resources via kubectl (NOT via Helm) ─────────────────
-      # ESO ServiceAccount is now in rickandmorty — no cross-namespace RBAC needed.
+      # ── f) Apply ESO resources ─────────────────────────────────────────────
       - name: Apply SecretStore
         run: |
           kubectl apply -f - <<'EOF'
@@ -473,7 +470,7 @@ jobs:
             --wait \
             --timeout 3m
 
-      # ── h) Helm install app chart (ESO kinds removed — safe to validate) ──
+      # ── h) Helm install app chart ─────────────────────────────────────────
       - name: Helm install rickandmorty-api
         run: |
           helm upgrade --install rickandmorty-api ./helm/rickandmorty-api \
@@ -488,13 +485,14 @@ jobs:
             --wait \
             --timeout 5m
 
-      # ── i) Wait for ESO sync + rollout ───────────────────────────────────
+      # ── i) Wait for ESO sync + rollout ────────────────────────────────────
       - name: Wait for ExternalSecret to sync
         run: |
           for i in $(seq 1 24); do
             STATUS=$(kubectl get externalsecret rickandmorty-api-db \
               -n ${{ env.K8S_NAMESPACE }} \
-              -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null || echo "")
+              -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' \
+              2>/dev/null || echo "")
             if [ "$STATUS" = "True" ]; then
               echo "ExternalSecret synced."
               break
@@ -510,141 +508,54 @@ jobs:
             --namespace ${{ env.K8S_NAMESPACE }} \
             --timeout=3m
 
-      # ── j) Smoke tests ────────────────────────────────────────────────────
-      - name: Smoke test — /sync reachable
+      # ── j) kube-prometheus-stack in APP cluster ───────────────────────────
+      # Grafana is disabled — this cluster only collects metrics.
+      # Prometheus NodePort 30909 is exposed on the host so the monitoring
+      # cluster can reach it via the Docker bridge gateway IP.
+      - name: Add Prometheus community Helm repo
         run: |
-          curl -sf http://localhost:8000/sync/?source_url=rickandmortyapi.com&resource=character > /dev/null && \
-            echo "✅ /sync OK" || (echo "❌ /sync FAILED" && exit 1)
-
-      - name: Smoke test — /db-mon?aspect=conn
-        run: |
-          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "http://localhost:8000/db-mon?aspect=conn")
-          [ "$STATUS" = "200" ] && echo "✅ DB conn OK" || (echo "❌ DB conn FAILED: $STATUS" && exit 1)
-
-      - name: Smoke test — /data validation (expect 400)
-        run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            "http://localhost:8000/data?sort_field=invalid&sort_order=ASC")
-          [ "$STATUS" = "400" ] && echo "✅ Validation 400 OK" || (echo "❌ Unexpected: $STATUS" && exit 1)
-
-      # ── Diagnostics on failure ────────────────────────────────────────────
-      - name: Dump logs on failure
-        if: failure()
-        run: |
-          echo "=== Pods ==="
-          kubectl get pods -n ${{ env.K8S_NAMESPACE }}
-
-          echo "=== ExternalSecret ==="
-          kubectl describe externalsecret -n ${{ env.K8S_NAMESPACE }} || true
-
-          echo "=== App logs ==="
-          kubectl logs -l app.kubernetes.io/name=rickandmorty-api \
-            -n ${{ env.K8S_NAMESPACE }} --tail=100 || true
-
-          echo "=== ESO logs ==="
-          kubectl logs -l app.kubernetes.io/name=external-secrets \
-            -n ${{ env.K8S_NAMESPACE }} --tail=50 || true
-      
-      # Save kubeconfig for use in monitoring-stack job
-      - name: Export kubeconfig
-        run: |
-          kind get kubeconfig --name rickandmorty > /tmp/kubeconfig-rickandmorty
-
-      - name: Upload kubeconfig
-        uses: actions/upload-artifact@v4
-        with:
-          name: kubeconfig-rickandmorty
-          path: /tmp/kubeconfig-rickandmorty
-          retention-days: 1
-
-# ───────────────────────────────────────────────────────────────────────────
-  # 6. Deploy Monitoring Stack (Prometheus + Grafana + Alerta)
-  #
-  # Cross-cluster monitoring architecture:
-  #   - App Cluster (rickandmorty): kube-prometheus-stack collects metrics from rickandmorty-api
-  #   - Monitoring Cluster (monitoring): Prometheus federates from app cluster + Grafana + Alerta
-  #
-  # This job:
-  #   a) Installs kube-prometheus-stack in APP cluster (rickandmorty) - collects app metrics
-  #   b) Creates second KinD cluster (monitoring) for centralized monitoring
-  #   c) Configures Prometheus federation - monitoring cluster scrapes from app cluster
-  #   d) Installs Grafana + Alerta in monitoring cluster
-  #   e) Deploys ServiceMonitors in APP cluster (rickandmorty)
-  #   f) Creates alerting rules
-  #   g) Creates Grafana dashboards
-  # ───────────────────────────────────────────────────────────────────────────
-  monitoring-stack:
-    name: Deploy Monitoring Stack
-    runs-on: ubuntu-latest
-    needs: deploy-kind
-    if: >-
-      github.event_name == 'push' && 
-      (
-        github.ref == 'refs/heads/main' || 
-        github.ref == 'refs/heads/master' || 
-        startsWith(github.ref, 'refs/heads/feature_')
-      )
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Download kubeconfig
-        uses: actions/download-artifact@v4
-        with:
-          name: kubeconfig-rickandmorty
-          path: /tmp
-
-      # Set up kubectl with the app cluster kubeconfig
-      - name: Setup kubectl for app cluster
-        run: |
-          export KUBECONFIG=/tmp/kubeconfig-rickandmorty
-          kubectl config use-context kind-rickandmorty
-
-      # ── a) Install kube-prometheus-stack in APP cluster (rickandmorty) ─────
-      - name: Add Prometheus community repos
-        run: |
-          helm repo add prometheus-community https://prometheus-community.github.io/helm-charts --force-update
+          helm repo add prometheus-community \
+            https://prometheus-community.github.io/helm-charts --force-update
           helm repo update
 
-      - name: Install kube-prometheus-stack in app cluster (rickandmorty)
-        env:
-          KUBECONFIG: /tmp/kubeconfig-rickandmorty
+      - name: Install kube-prometheus-stack in app cluster
         run: |
-          # Point to app cluster (rickandmorty)
           kubectl config use-context kind-rickandmorty
-
           helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
             --namespace monitoring \
             --create-namespace \
             --set prometheus.prometheusSpec.retention=7d \
-            --set prometheus.prometheusSpec.storageSpec.volumeClaimTemplate.spec.resourcesrequests.storage=8Gi \
+            --set prometheus.service.type=NodePort \
+            --set prometheus.service.nodePort=30909 \
             --set grafana.enabled=false \
             --set alertmanager.enabled=true \
             --set alertmanager.service.type=NodePort \
             --set alertmanager.service.nodePort=30980 \
-            --set prometheus.service.type=NodePort \
-            --set prometheus.service.nodePort=30909 \
             --wait \
             --timeout 5m
 
-      # ── b) Create ServiceMonitor for rickandmorty-api in APP cluster ─────
-      - name: Apply ServiceMonitor in app cluster
-        env:
-          KUBECONFIG: /tmp/kubeconfig-rickandmorty
+      - name: Apply ServiceMonitor for rickandmorty-api
         run: |
           kubectl config use-context kind-rickandmorty
           kubectl apply -f ./monitoring/prometheus/servicemonitor.yaml
 
-      # ── c) Create PrometheusRule in APP cluster ───────────────────────────
-      - name: Apply Prometheus alerting rules in app cluster
-        env:
-          KUBECONFIG: /tmp/kubeconfig-rickandmorty
+      - name: Apply Prometheus alerting rules
         run: |
           kubectl config use-context kind-rickandmorty
           kubectl apply -f ./monitoring/prometheus/rules.yaml
 
-      # ── d) Create second KinD cluster for monitoring ───────────────────────
+      # ── k) Discover Docker bridge IP ──────────────────────────────────────
+      # KinD pods cannot use "localhost" to reach the host — they are inside
+      # Docker containers. The Docker bridge gateway is the host's IP as seen
+      # from any KinD pod, and is used as the federation target.
+      - name: Discover Docker bridge gateway IP
+        run: |
+          HOST_IP=$(docker network inspect kind \
+            | jq -r '.[0].IPAM.Config[0].Gateway')
+          echo "HOST_IP=$HOST_IP" >> $GITHUB_ENV
+          echo "Docker bridge gateway (host IP for KinD pods): $HOST_IP"
+
+      # ── l) Monitoring KinD cluster ────────────────────────────────────────
       - name: Write monitoring KinD cluster config
         run: |
           cat > /tmp/kind-config-monitoring.yaml << 'EOF'
@@ -659,9 +570,6 @@ jobs:
                 - containerPort: 30400
                   hostPort: 4000
                   protocol: TCP
-                - containerPort: 30980
-                  hostPort: 9980
-                  protocol: TCP
           EOF
 
       - name: Create monitoring KinD cluster
@@ -670,17 +578,39 @@ jobs:
           cluster_name: monitoring
           config: /tmp/kind-config-monitoring.yaml
 
-      # ── e) Install monitoring components in monitoring cluster ─────────────
-      - name: Install Grafana + Alerta in monitoring cluster
+      # ── m) kube-prometheus-stack in MONITORING cluster ────────────────────
+      # Prometheus is ENABLED here and configured with additionalScrapeConfigs
+      # to federate from the app cluster's Prometheus at HOST_IP:30909.
+      # Only rickandmorty-api metrics are pulled across (match[] filter).
+      - name: Install kube-prometheus-stack in monitoring cluster
         run: |
           kubectl config use-context kind-monitoring
 
-          # Install kube-prometheus-stack (just for Grafana, not Prometheus)
+          # Write the federation scrape config to a temp file to avoid
+          # shell quoting issues when passing JSON with $HOST_IP interpolated.
+          cat > /tmp/federation-scrape-config.yaml << EOF
+          - job_name: federate-rickandmorty
+            honor_labels: true
+            metrics_path: /federate
+            params:
+              match[]:
+                - '{job="rickandmorty-api"}'
+                - '{__name__=~"rickandmorty_.*"}'
+                - '{__name__=~"up|scrape_.*", job="rickandmorty-api"}'
+            static_configs:
+              - targets:
+                  - "${{ env.HOST_IP }}:30909"
+                labels:
+                  source_cluster: rickandmorty
+            scrape_interval: 30s
+            scrape_timeout: 10s
+          EOF
+
           helm upgrade --install prometheus prometheus-community/kube-prometheus-stack \
             --namespace monitoring \
             --create-namespace \
-            --set prometheus.enabled=false \
-            --set prometheusOperator.enabled=true \
+            --set prometheus.enabled=true \
+            --set prometheus.service.type=ClusterIP \
             --set grafana.enabled=true \
             --set grafana.service.type=NodePort \
             --set grafana.service.nodePort=30300 \
@@ -688,10 +618,18 @@ jobs:
             --set alertmanager.enabled=true \
             --set alertmanager.service.type=NodePort \
             --set alertmanager.service.nodePort=30980 \
+            --set-file prometheus.prometheusSpec.additionalScrapeConfigsSecret=null \
+            --set-json "prometheus.prometheusSpec.additionalScrapeConfigs=$(
+              cat /tmp/federation-scrape-config.yaml \
+                | python3 -c 'import sys,json,yaml; print(json.dumps(yaml.safe_load(sys.stdin.read())))'
+            )" \
             --wait \
             --timeout 5m
 
-          # Install Alerta
+      # ── n) Alerta ─────────────────────────────────────────────────────────
+      - name: Install Alerta in monitoring cluster
+        run: |
+          kubectl config use-context kind-monitoring
           helm repo add alerta https://alerta.github.io/helm-charts --force-update
           helm upgrade --install alerta alerta/alerta \
             --namespace monitoring \
@@ -704,160 +642,128 @@ jobs:
             --wait \
             --timeout 3m
 
-      # ── f) Configure Prometheus federation ─────────────────────────────────
-      - name: Configure Prometheus federation
-        run: |
-          kubectl config use-context kind-monitoring
-
-          # Apply Prometheus with federation config to scrape from app cluster
-          kubectl apply -f - <<'EOF'
-          apiVersion: monitoring.coreos.com/v1
-          kind: Prometheus
-          metadata:
-            name: federation
-            namespace: monitoring
-          spec:
-            replicas: 1
-            retention: 7d
-            storage:
-              volumeClaimTemplate:
-                spec:
-                  resources:
-                    requests:
-                      storage: 8Gi
-            serviceAccountName: prometheus
-            serviceMonitorSelector:
-              matchLabels:
-                federate: "true"
-            podMonitorSelector: {}
-            ruleSelector: {}
-            alerting:
-              alertmanagers:
-                - namespace: monitoring
-                  name: prometheus-alertmanager
-                  port: web
-            externalLabels:
-              cluster: monitoring
-            remoteWrite:
-              - url: "http://prometheus.monitoring.svc.cluster.local:9090/api/v1/write"
-            # Federation config - scrape from app cluster's Prometheus
-            federation:
-              endpoints:
-                - port: web
-                  interval: 30s
-          EOF
-
-      # Create a Service to expose app cluster Prometheus for federation
-      - name: Expose app cluster Prometheus for federation
-        run: |
-          # Use hostNetwork to access the app cluster's Prometheus from monitoring cluster
-          # Since they're in different clusters, we need to use the host ports
-          echo "App cluster Prometheus accessible at: http://localhost:30909"
-
-      # ── g) Add app cluster as federated source ─────────────────────────────
-      - name: Add app cluster Prometheus as federated source
-        run: |
-          kubectl config use-context kind-monitoring
-
-          # Create a ServiceMonitor that uses the app cluster's Prometheus endpoint
-          # Since we're in CI, we configure the monitoring Prometheus to federate
-          # by using the remoteWrite from app cluster or by configuring federation jobs
-          # For KinD, we'll use a simpler approach - configure the monitoring Prometheus
-          # to scrape from app cluster via NodePort
-          kubectl apply -f - <<'EOF'
-          apiVersion: monitoring.coreos.com/v1
-          kind: ServiceMonitor
-          metadata:
-            name: federated-rickandmorty
-            namespace: monitoring
-            labels:
-              release: prometheus
-              federate: "true"
-          spec:
-            endpoints:
-              - interval: 30s
-                port: web
-                path: /federate
-                params:
-                  'match[]':
-                    - '{__name__=~".*"}'
-            namespaceSelector: {}
-            selector: {}
-          EOF
-
-      # ── h) Configure Alertmanager to send alerts to Alerta ───────────────
+      # ── o) Configure Alertmanager → Alerta ───────────────────────────────
       - name: Configure Alertmanager for Alerta
         run: |
           kubectl config use-context kind-monitoring
-
-          kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=alertmanager,app.kubernetes.io/instance=prometheus-alertmanager -n monitoring --timeout=120s || true
-
+          kubectl wait --for=condition=Ready pod \
+            -l app.kubernetes.io/name=alertmanager \
+            -n monitoring \
+            --timeout=120s || true
           kubectl apply -f ./monitoring/prometheus/alertmanager-config.yaml
 
-      # ── i) Create Grafana dashboards ConfigMap ───────────────────────────
+      # ── p) Grafana dashboards ─────────────────────────────────────────────
       - name: Create Grafana dashboards ConfigMap
         run: |
           kubectl config use-context kind-monitoring
-
-          # Apply dashboard ConfigMaps from external files
-          # Dashboard 1: API Overview
           kubectl create configmap rickandmorty-api-dashboard \
-            --from-file=rickandmorty-api-dashboard.json=./monitoring/grafana/dashboards/rickandmorty-api-dashboard.json \
-            --namespace=monitoring \
-            --labels=grafana_dashboard=1 \
-            --dry-run=client -o yaml | kubectl apply -f -
+            --from-file=rickandmorty-api-dashboard.json=\
+            ./monitoring/grafana/dashboards/rickandmorty-api-dashboard.json \
+            --namespace monitoring \
+            --dry-run=client -o yaml \
+            | kubectl label --local -f - grafana_dashboard=1 -o yaml \
+            | kubectl apply -f -
 
-          # Dashboard 2: Cluster Overview
           kubectl create configmap rickandmorty-cluster-dashboard \
-            --from-file=rickandmorty-cluster-dashboard.json=./monitoring/grafana/dashboards/rickandmorty-cluster-dashboard.json \
-            --namespace=monitoring \
-            --labels=grafana_dashboard=1 \
-            --dry-run=client -o yaml | kubectl apply -f -
+            --from-file=rickandmorty-cluster-dashboard.json=\
+            ./monitoring/grafana/dashboards/rickandmorty-cluster-dashboard.json \
+            --namespace monitoring \
+            --dry-run=client -o yaml \
+            | kubectl label --local -f - grafana_dashboard=1 -o yaml \
+            | kubectl apply -f -
 
-      # ── j) Verify monitoring stack ───────────────────────────────────────
-      - name: Verify app cluster monitoring
-        run: |
-          kubectl config use-context kind-rickandmorty
-          echo "=== App Cluster (rickandmorty) Monitoring ==="
-          kubectl get pods -n monitoring
-          kubectl get svc -n monitoring
-
-      - name: Verify monitoring cluster
+      # ── q) Verify federation is working ───────────────────────────────────
+      - name: Wait for federation scrape to succeed
         run: |
           kubectl config use-context kind-monitoring
-          echo "=== Monitoring Cluster ==="
-          kubectl get pods -n monitoring
-          kubectl get svc -n monitoring
+          echo "Waiting for monitoring Prometheus to be ready..."
+          kubectl wait --for=condition=Ready pod \
+            -l app.kubernetes.io/name=prometheus \
+            -n monitoring \
+            --timeout=120s
 
-      # ── k) Print monitoring URLs ──────────────────────────────────────────
-      - name: Print monitoring URLs
+          echo "Polling federation target health..."
+          # Port-forward monitoring Prometheus to query its targets API
+          kubectl port-forward svc/prometheus-kube-prometheus-prometheus \
+            9090:9090 -n monitoring &
+          PF_PID=$!
+          sleep 5
+
+          for i in $(seq 1 12); do
+            HEALTH=$(curl -s \
+              "http://localhost:9090/api/v1/targets?job=federate-rickandmorty" \
+              | jq -r '.data.activeTargets[0].health' 2>/dev/null || echo "unknown")
+            echo "Attempt $i/12 — federation target health: $HEALTH"
+            if [ "$HEALTH" = "up" ]; then
+              echo "✅ Federation target is UP"
+              kill $PF_PID 2>/dev/null || true
+              break
+            fi
+            sleep 10
+          done
+          kill $PF_PID 2>/dev/null || true
+
+      # ── r) Smoke tests ─────────────────────────────────────────────────────
+      - name: Smoke test — /sync reachable
+        run: |
+          curl -sf "http://localhost:8000/sync/?source_url=rickandmortyapi.com&resource=character" \
+            > /dev/null && echo "✅ /sync OK" || (echo "❌ /sync FAILED" && exit 1)
+
+      - name: Smoke test — /db-mon?aspect=conn
+        run: |
+          STATUS=$(curl -sf -o /dev/null -w "%{http_code}" \
+            "http://localhost:8000/db-mon?aspect=conn")
+          [ "$STATUS" = "200" ] \
+            && echo "✅ DB conn OK" \
+            || (echo "❌ DB conn FAILED: $STATUS" && exit 1)
+
+      - name: Smoke test — /data validation (expect 400)
+        run: |
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            "http://localhost:8000/data?sort_field=invalid&sort_order=ASC")
+          [ "$STATUS" = "400" ] \
+            && echo "✅ Validation 400 OK" \
+            || (echo "❌ Unexpected: $STATUS" && exit 1)
+
+      # ── s) Print summary ───────────────────────────────────────────────────
+      - name: Print stack summary
         run: |
           echo ""
-          echo "=========================================="
-          echo "Monitoring Stack Deployed Successfully!"
-          echo "=========================================="
+          echo "============================================"
+          echo " Deployment Complete"
+          echo "============================================"
           echo ""
-          echo "APP CLUSTER (rickandmorty):"
-          echo "  Prometheus: http://localhost:30909"
+          echo "APP CLUSTER (kind-rickandmorty):"
+          echo "  API:          http://localhost:8000"
+          echo "  Prometheus:   http://localhost:30909"
           echo "  Alertmanager: http://localhost:30980"
           echo ""
-          echo "MONITORING CLUSTER:"
-          echo "  Grafana: http://localhost:3000 (admin/admin)"
-          echo "  Alerta: http://localhost:4040 (demo mode)"
+          echo "MONITORING CLUSTER (kind-monitoring):"
+          echo "  Grafana:      http://localhost:3000  (admin/admin)"
+          echo "  Alerta:       http://localhost:4000"
           echo ""
-          echo "Cross-cluster setup:"
-          echo "  - App cluster has Prometheus collecting rickandmorty-api metrics"
-          echo "  - Monitoring cluster has Grafana + Alerta"
-          echo "  - Configure federation to federate metrics between clusters"
+          echo "Federation:"
+          echo "  Monitoring Prometheus scrapes app Prometheus"
+          echo "  at ${{ env.HOST_IP }}:30909 via Docker bridge"
           echo ""
-          echo "Dashboards created:"
-          echo "  - RickAndMorty API Overview"
-          echo "  - RickAndMorty Cluster Overview"
-          echo ""
-          echo "Alerts configured:"
-          echo "  - RickAndMortyAPIHighErrorRate"
-          echo "  - RickAndMortyAPILatencyHigh"
-          echo "  - RickAndMortyAPIDown"
-          echo "  - RickAndMortyDatabaseConnectionHigh"
-          echo "  - RickAndMortySyncJobFailing"
-          echo ""
+
+      # ── Diagnostics on failure ─────────────────────────────────────────────
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          echo "=== APP CLUSTER ==="
+          kubectl config use-context kind-rickandmorty
+          kubectl get pods -n ${{ env.K8S_NAMESPACE }}
+          kubectl get pods -n monitoring
+          kubectl logs -l app.kubernetes.io/name=rickandmorty-api \
+            -n ${{ env.K8S_NAMESPACE }} --tail=100 || true
+          kubectl logs -l app.kubernetes.io/name=prometheus \
+            -n monitoring --tail=50 || true
+
+          echo "=== MONITORING CLUSTER ==="
+          kubectl config use-context kind-monitoring
+          kubectl get pods -n monitoring
+          kubectl logs -l app.kubernetes.io/name=prometheus \
+            -n monitoring --tail=100 || true
+          kubectl logs -l app.kubernetes.io/name=grafana \
+            -n monitoring --tail=50 || true
