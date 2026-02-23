@@ -1,0 +1,18 @@
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: rickandmorty-api
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: rickandmorty-api
+  namespaceSelector:
+    matchNames:
+      - rickandmorty
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
