@@ -1,6 +1,6 @@
----
-title: Rick and Morty API — High-Level Architecture
----
+# Rick and Morty API — High-Level Architecture
+
+```mermaid
 flowchart TB
     %% ── External ──────────────────────────────────────────────────────────
     Client(["👤 Client\n(curl / browser / app)"])
@@ -106,3 +106,4 @@ flowchart TB
     class PGMain,AppDB,CharTable db
     class LintJob,UnitJob,BuildJob,PushJob cicd
     class SecretsFile,ConfigFile config
+```
